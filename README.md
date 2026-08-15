@@ -56,4 +56,4 @@
 
 ## 📄 License
 
-Proprietary Software. Copyright (c) 2026 MaksVyte. All Rights Reserved. See [LICENSE](LICENSE) for details.
+MIT License. Copyright (c) 2026 MaksVyte. See [LICENSE](LICENSE) for details.
