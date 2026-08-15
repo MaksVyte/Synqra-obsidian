@@ -1,92 +1,59 @@
-# Obsidian Sample Plugin
+# ⚡ Synqra (Obsidian Plugin)
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+> Real-time multi-user live collaboration, note syncing, and Excalidraw whiteboards for Obsidian.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+---
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+## ✨ Features
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
+- **Live Concurrent Note Editing**: Multi-cursor, real-time collaboration powered by conflict-free Yjs CRDTs.
+- **Excalidraw Live Canvas**: Draw simultaneously with peers on `.excalidraw` and `.excalidraw.md` drawings at 30+ FPS.
+- **Server Password Authentication**: Securely connect to self-hosted Synqra relay servers.
+- **Admin Room Controls**: Server admins can create, view, and delete isolated collaboration rooms directly from the plugin settings.
+- **Automatic Background Sync**: Keeps your shared notes synchronized with zero data loss or text collisions.
 
-## First time developing plugins?
+---
 
-Quick starting guide for new plugin devs:
+## 🚀 Installation
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### Method 1: Using BRAT (Recommended)
+1. Install the **BRAT** (Beta Reviewers Auto-update Tester) plugin from Obsidian Community Plugins.
+2. In Obsidian **Settings** → **BRAT** → Click **Add Beta plugin**.
+3. Enter the repository URL: `https://github.com/MaksVyte/Synqra-obsidian`.
+4. Enable **Synqra** under Community Plugins.
 
-## Releasing new releases
+### Method 2: Manual Installation
+1. Go to the [Releases](https://github.com/MaksVyte/Synqra-obsidian/releases/latest) page and download:
+   - `main.js`
+   - `manifest.json`
+   - `styles.css`
+2. In your Obsidian vault folder, create the directory:
+   `<YourVault>/.obsidian/plugins/synqra/`
+3. Place `main.js`, `manifest.json`, and `styles.css` into that folder.
+4. In Obsidian **Settings** → **Community Plugins**, click **Reload plugins** and toggle on **Synqra**.
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+---
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+## ⚙️ Configuration & Getting Started
 
-## Adding your plugin to the community plugin list
+1. Open Obsidian **Settings** → **Synqra - Live Collaboration**.
+2. **Server URL**: Enter your self-hosted Synqra server address (e.g. `ws://<your-server-ip>:5612` or `wss://collab.yourdomain.com`).
+   - *Need to host your own server? Check out the [Synqra Server Repository](https://github.com/MaksVyte/Synqra).*
+3. **Server Password**: Enter the server password provided by the server host.
+4. **Room ID**: Enter the collaboration room identifier (e.g. `vault-a` or your team room).
+5. **Display Name & Cursor Color**: Customize how other collaborators see your cursor and selections.
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+### 🛡️ Admin Room Controls (Server Admins)
+1. Scroll down to **Server Admin Controls** in the plugin settings.
+2. Enter your `ADMIN_PASSWORD` and click **Unlock Admin Panel**.
+3. You can now:
+   - **View Live Rooms**: Check real-time connected users and active documents.
+   - **Create New Rooms**: Enter a Room ID to initialize a new room on the server.
+   - **Switch Rooms**: Switch your active vault connection with 1-click.
+   - **Delete Rooms**: Permanently remove unused rooms and clean up server storage.
 
-## How to use
+---
 
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+## 📄 License
 
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
-}
-```
-
-If you have multiple URLs, you can also do:
-
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
-}
-```
-
-## API Documentation
-
-See https://docs.obsidian.md
+Proprietary Software. Copyright (c) 2026 MaksVyte. All Rights Reserved. See [LICENSE](LICENSE) for details.
