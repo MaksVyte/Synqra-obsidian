@@ -1,4 +1,4 @@
-import { Notice, TFolder, type TFile, type Vault } from 'obsidian';
+import { FileManager, Notice, requestUrl, TFolder, type TFile, type Vault } from 'obsidian';
 import type * as Y from 'yjs';
 import type { DocHandle, SyncManager } from '../syncManager';
 import type { FileEntry } from '../types';
@@ -35,6 +35,7 @@ export class ManifestManager {
 	constructor(
 		private readonly vault: Vault,
 		private readonly exclusionManager: ExclusionManager,
+		private readonly fileManager?: FileManager,
 	) {}
 
 	async connect(syncManager: SyncManager): Promise<void> {
@@ -151,7 +152,7 @@ export class ManifestManager {
 				await this.vault.delete(item, true);
 				purged++;
 			} catch {} finally {
-				if (unmute) setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
+				if (unmute) window.setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
 			}
 		}
 
@@ -161,7 +162,7 @@ export class ManifestManager {
 				await this.vault.delete(item, true);
 				purged++;
 			} catch {} finally {
-				if (unmute) setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
+				if (unmute) window.setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
 			}
 		}
 
@@ -183,6 +184,7 @@ export class ManifestManager {
 		for (const [path, entry] of entries) {
 			if (!path || path.startsWith('/') || path.startsWith('\\')) continue;
 			const diskPath = toLocalPath(path);
+			const localFile = getFileByPath(this.vault, diskPath);
 
 			if (entry.directory) {
 				const existing = this.vault.getAbstractFileByPath(diskPath);
@@ -193,20 +195,13 @@ export class ManifestManager {
 				continue;
 			}
 
-			const localFile = getFileByPath(this.vault, diskPath);
-			let needsSync = false;
-
-			if (!localFile) {
-				needsSync = true;
-			} else if (entry.binary) {
-				const binaryContent = await this.vault.readBinary(localFile);
-				if ((await hashBuffer(binaryContent)) !== entry.hash) {
-					needsSync = true;
-				}
-			} else {
-				const content = normalizeLineEndings(await this.vault.read(localFile));
-				if ((await hashContent(content)) !== entry.hash) {
-					needsSync = true;
+			let needsSync = true;
+			if (localFile) {
+				const localHash = entry.binary
+					? await hashBuffer(await this.vault.readBinary(localFile))
+					: await hashContent(normalizeLineEndings(await this.vault.read(localFile)));
+				if (localHash === entry.hash) {
+					needsSync = false;
 				}
 			}
 
@@ -218,9 +213,9 @@ export class ManifestManager {
 					const sep = httpUrl.endsWith('/') ? '' : '/';
 					const passParam = serverPassword ? `?password=${encodeURIComponent(serverPassword)}` : '';
 					const fileUrl = `${httpUrl}${sep}file/${encodeURIComponent(roomId)}/${encodeURI(path)}${passParam}`;
-					const res = await fetch(fileUrl);
-					if (res.ok) {
-						const arrayBuf = await res.arrayBuffer();
+					const res = await requestUrl({ url: fileUrl, throw: false });
+					if (res.status === 200) {
+						const arrayBuf = res.arrayBuffer;
 						const parentDir = diskPath.substring(0, diskPath.lastIndexOf('/'));
 						if (parentDir) await ensureFolder(this.vault, parentDir);
 
@@ -232,7 +227,7 @@ export class ManifestManager {
 								await this.vault.createBinary(diskPath, arrayBuf);
 							}
 						} finally {
-							if (unmute) setTimeout(() => unmute(diskPath), VAULT_EVENT_SETTLE_MS);
+							if (unmute) window.setTimeout(() => unmute(diskPath), VAULT_EVENT_SETTLE_MS);
 						}
 						synced++;
 					}
@@ -242,7 +237,7 @@ export class ManifestManager {
 				continue;
 			}
 
-			const tempHandle = this.syncManager.getDoc(path);
+			const tempHandle = this.syncManager?.getDoc(path);
 			if (!tempHandle) continue;
 
 			try {
@@ -260,7 +255,7 @@ export class ManifestManager {
 					}
 				} finally {
 					if (unmute) {
-						setTimeout(() => unmute(diskPath), VAULT_EVENT_SETTLE_MS);
+						window.setTimeout(() => unmute(diskPath), VAULT_EVENT_SETTLE_MS);
 					}
 				}
 				synced++;

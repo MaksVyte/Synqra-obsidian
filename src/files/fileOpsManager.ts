@@ -97,7 +97,7 @@ export class FileOpsManager {
 	}
 
 	private async applyRemoteOpInner(rawOp: FileOp): Promise<void> {
-		const op = { ...rawOp } as FileOp;
+		const op = { ...rawOp };
 		if ('path' in op) op.path = toLocalPath(normalizePath(op.path));
 		if ('oldPath' in op) op.oldPath = toLocalPath(normalizePath(op.oldPath));
 		if ('newPath' in op) op.newPath = toLocalPath(normalizePath(op.newPath));
@@ -108,20 +108,13 @@ export class FileOpsManager {
 			switch (op.type) {
 				case 'create': {
 					const exists = this.vault.getAbstractFileByPath(op.path);
-					if (exists && exists instanceof TFile) {
-						if (op.binary) {
-							await this.vault.modifyBinary(exists, base64ToArrayBuffer(op.content));
-						} else {
-							await this.vault.modify(exists, op.content);
-						}
-					} else if (!exists) {
-						const parentDir = op.path.substring(0, op.path.lastIndexOf('/'));
-						if (parentDir) await ensureFolder(this.vault, parentDir);
-						if (op.binary) {
-							await this.vault.createBinary(op.path, base64ToArrayBuffer(op.content));
-						} else {
-							await this.vault.create(op.path, op.content);
-						}
+					if (exists) break;
+					const parentDir = op.path.substring(0, op.path.lastIndexOf('/'));
+					if (parentDir) await ensureFolder(this.vault, parentDir);
+					if (op.binary) {
+						await this.vault.createBinary(op.path, new ArrayBuffer(0));
+					} else {
+						await this.vault.create(op.path, '');
 					}
 					break;
 				}
@@ -142,7 +135,7 @@ export class FileOpsManager {
 					// Detach any open leaves for this file or sub-files if folder to release locks and prevent resurrection
 					const prefix = op.path.endsWith('/') ? op.path : op.path + '/';
 					this.app.workspace.iterateAllLeaves((leaf) => {
-						const view = leaf.view as any;
+						const view = leaf.view as { file?: { path: string } };
 						const p = view?.file?.path;
 						if (p && (p === op.path || p.startsWith(prefix) || (file && (p === file.path || p.startsWith(file.path + '/'))))) {
 							leaf.detach();
@@ -151,13 +144,13 @@ export class FileOpsManager {
 
 					if (file) {
 						try {
-							await this.vault.delete(file, true);
+							await this.fileManager.trashFile(file);
 						} catch {
 							// Ignore if already deleted
 						}
 					}
 					this.pendingChunks.delete(op.path);
-					setTimeout(() => this.unmutePathEvents(op.path), VAULT_EVENT_SETTLE_MS);
+					window.setTimeout(() => this.unmutePathEvents(op.path), VAULT_EVENT_SETTLE_MS);
 					break;
 				}
 				case 'rename': {
@@ -172,7 +165,7 @@ export class FileOpsManager {
 							if (!this.vault.getAbstractFileByPath(op.newPath)) throw err;
 						}
 					} else if (file && alreadyExists) {
-						await this.vault.delete(file, true);
+						await this.fileManager.trashFile(file);
 					}
 					break;
 				}

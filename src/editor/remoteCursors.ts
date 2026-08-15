@@ -16,25 +16,21 @@ class RemoteSelectionMarker implements LayerMarker {
 	) {}
 
 	draw(): HTMLElement {
-		const elt = document.createElement('div');
-		elt.className = 'cm-remote-selection-box';
-		elt.style.position = 'absolute';
-		elt.style.top = `${this.top}px`;
-		elt.style.left = `${this.left}px`;
-		elt.style.width = `${this.width}px`;
-		elt.style.height = `${this.height}px`;
-		elt.style.backgroundColor = this.colorLight;
-		elt.style.pointerEvents = 'none';
-		elt.style.userSelect = 'none';
+		const elt = createDiv({ cls: 'cm-remote-selection-box' });
+		elt.style.setProperty('top', `${this.top}px`);
+		elt.style.setProperty('left', `${this.left}px`);
+		elt.style.setProperty('width', `${this.width}px`);
+		elt.style.setProperty('height', `${this.height}px`);
+		elt.style.setProperty('background-color', this.colorLight);
 		return elt;
 	}
 
 	update(dom: HTMLElement, prev: LayerMarker): boolean {
 		if (prev instanceof RemoteSelectionMarker && prev.colorLight === this.colorLight) {
-			dom.style.top = `${this.top}px`;
-			dom.style.left = `${this.left}px`;
-			dom.style.width = `${this.width}px`;
-			dom.style.height = `${this.height}px`;
+			dom.style.setProperty('top', `${this.top}px`);
+			dom.style.setProperty('left', `${this.left}px`);
+			dom.style.setProperty('width', `${this.width}px`);
+			dom.style.setProperty('height', `${this.height}px`);
 			return true;
 		}
 		return false;
@@ -68,58 +64,25 @@ class RemoteCursorMarker implements LayerMarker {
 	}
 
 	draw(): HTMLElement {
-		const elt = document.createElement('div');
-		elt.className = 'cm-remote-cursor-container';
-		elt.style.position = 'absolute';
-		elt.style.top = `${this.top}px`;
-		elt.style.left = `${this.left - 6}px`;
-		elt.style.height = `${this.height}px`;
-		elt.style.width = '14px';
-		elt.style.pointerEvents = 'auto';
-		elt.style.cursor = 'default';
-		elt.style.userSelect = 'none';
-		elt.style.zIndex = '100';
+		const elt = createDiv({ cls: 'cm-remote-cursor-container' });
+		elt.style.setProperty('top', `${this.top}px`);
+		elt.style.setProperty('left', `${this.left - 6}px`);
+		elt.style.setProperty('height', `${this.height}px`);
 
-		const caret = document.createElement('div');
-		caret.className = 'cm-remote-cursor-caret';
-		caret.style.position = 'absolute';
-		caret.style.top = '0';
-		caret.style.left = '6px';
-		caret.style.width = '2px';
-		caret.style.height = '100%';
-		caret.style.backgroundColor = this.color;
-		caret.style.pointerEvents = 'none';
+		const caret = elt.createDiv({ cls: 'cm-remote-cursor-caret' });
+		caret.style.setProperty('background-color', this.color);
 
-		const badge = document.createElement('div');
-		badge.className = 'cm-remote-cursor-badge';
-		badge.textContent = this.name;
-		badge.style.position = 'absolute';
-		badge.style.bottom = '100%';
-		badge.style.left = '6px';
-		badge.style.marginBottom = '2px';
-		badge.style.backgroundColor = this.color;
-		badge.style.color = '#ffffff';
-		badge.style.fontSize = '10px';
-		badge.style.fontFamily = 'var(--font-text, sans-serif)';
-		badge.style.fontWeight = '500';
-		badge.style.lineHeight = '1.2';
-		badge.style.padding = '1px 5px';
-		badge.style.borderRadius = '3px';
-		badge.style.whiteSpace = 'nowrap';
-		badge.style.pointerEvents = 'none';
-		badge.style.userSelect = 'none';
-		badge.style.boxShadow = '0 1px 3px rgba(0,0,0,0.25)';
+		const badge = elt.createDiv({ cls: 'cm-remote-cursor-badge', text: this.name });
+		badge.style.setProperty('background-color', this.color);
 
-		elt.appendChild(caret);
-		elt.appendChild(badge);
 		return elt;
 	}
 
 	update(dom: HTMLElement, prev: LayerMarker): boolean {
 		if (prev instanceof RemoteCursorMarker && prev.color === this.color && prev.name === this.name) {
-			dom.style.top = `${this.top}px`;
-			dom.style.left = `${this.left - 6}px`;
-			dom.style.height = `${this.height}px`;
+			dom.style.setProperty('top', `${this.top}px`);
+			dom.style.setProperty('left', `${this.left - 6}px`);
+			dom.style.setProperty('height', `${this.height}px`);
 			return true;
 		}
 		return false;
@@ -188,7 +151,7 @@ export function createRemoteCursorPlugin(
 
 	const clickHandler = EditorView.domEventHandlers({
 		pointerdown(_e, view) {
-			setTimeout(() => {
+			window.setTimeout(() => {
 				if (view.dom && view.dom.isConnected && view.hasFocus) {
 					const localState = awareness.getLocalState();
 					if (localState) {
@@ -232,8 +195,8 @@ export function createRemoteCursorPlugin(
 				const end = Math.max(from, to);
 				const range = EditorSelection.range(start, end);
 
-				const { color = '#30bced' } = state.user || {};
-				const colorLight = (state.user && state.user.colorLight) || color + '33';
+				const { color = '#30bced' } = (state.user as { color?: string } | undefined) || {};
+				const colorLight = (state.user as { colorLight?: string } | undefined)?.colorLight || color + '33';
 
 				const rectMarkers = RectangleMarker.forRange(view, 'cm-remote-selection-box', range);
 				for (const rm of rectMarkers) {
@@ -284,7 +247,7 @@ export function createRemoteCursorPlugin(
 				const top = coords.top - docRect.top + view.scrollDOM.scrollTop;
 				const height = coords.bottom - coords.top || 18;
 
-				const { color = '#30bced', name = 'Anonymous' } = state.user || {};
+				const { color = '#30bced', name = 'Anonymous' } = (state.user as { color?: string; name?: string } | undefined) || {};
 
 				markers.push(new RemoteCursorMarker(top, left, height, color, name, clientId));
 			});

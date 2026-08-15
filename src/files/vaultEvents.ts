@@ -29,9 +29,7 @@ export function registerVaultEvents(plugin: CollabPlugin): void {
 			if (!plugin.manifestManager.isSharedPath(originalPath)) return;
 			if (renamedPaths.has(originalPath)) return;
 
-			if (plugin.fileOpsManager.isPathMuted(originalPath)) return;
-
-			void plugin.fileOpsManager.onFileCreate(file as TFile);
+			void plugin.fileOpsManager.onFileCreate(file);
 
 			if (file instanceof TFile) {
 				void (async () => {

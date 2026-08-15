@@ -27,51 +27,55 @@
  */
 
 .cm-remote-cursor-container {
-	position: absolute !important;
-	pointer-events: auto !important;
-	user-select: none !important;
-	z-index: 100 !important;
+	position: absolute;
+	width: 14px;
+	pointer-events: auto;
+	cursor: default;
+	user-select: none;
+	z-index: 100;
 }
 
 .cm-remote-cursor-caret {
-	position: absolute !important;
-	top: 0 !important;
-	width: 2px !important;
-	height: 100% !important;
-	pointer-events: none !important;
-	user-select: none !important;
+	position: absolute;
+	top: 0;
+	left: 6px;
+	width: 2px;
+	height: 100%;
+	pointer-events: none;
+	user-select: none;
 }
 
 .cm-remote-cursor-badge {
-	position: absolute !important;
-	bottom: 100% !important;
-	margin-bottom: 2px !important;
-	font-size: 10px !important;
-	font-family: var(--font-text, sans-serif) !important;
-	font-weight: 500 !important;
-	line-height: 1.2 !important;
-	padding: 1px 5px !important;
-	border-radius: 3px !important;
-	color: #ffffff !important;
-	white-space: nowrap !important;
-	pointer-events: none !important;
-	user-select: none !important;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25) !important;
-	opacity: 0 !important;
-	transform: translateY(2px) scale(0.95) !important;
-	transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out !important;
+	position: absolute;
+	bottom: 100%;
+	left: 6px;
+	margin-bottom: 2px;
+	font-size: 10px;
+	font-family: var(--font-text, sans-serif);
+	font-weight: 500;
+	line-height: 1.2;
+	padding: 1px 5px;
+	border-radius: 3px;
+	color: #ffffff;
+	white-space: nowrap;
+	pointer-events: none;
+	user-select: none;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+	opacity: 0;
+	transform: translateY(2px) scale(0.95);
+	transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
 }
 
 .cm-remote-cursor-container:hover .cm-remote-cursor-badge {
-	opacity: 1 !important;
-	transform: translateY(0) scale(1) !important;
+	opacity: 1;
+	transform: translateY(0) scale(1);
 }
 
 .cm-remote-selection-box {
-	position: absolute !important;
-	pointer-events: none !important;
-	user-select: none !important;
-	border-radius: 2px !important;
+	position: absolute;
+	pointer-events: none;
+	user-select: none;
+	border-radius: 2px;
 }
 
 /* Admin Panel UI */
@@ -88,8 +92,3 @@
 	padding: 16px;
 	margin-top: 12px;
 }
-
-.collab-admin-panel h4 {
-	margin: 12px 0 8px 0;
-	color: var(--text-normal);
-}

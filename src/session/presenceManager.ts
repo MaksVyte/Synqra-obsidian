@@ -1,4 +1,4 @@
-import { Notice, type App } from 'obsidian';
+import type { App } from 'obsidian';
 import type { ControlChannel } from '../sync/controlChannel';
 import type { SyncManager } from '../syncManager';
 

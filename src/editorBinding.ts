@@ -25,9 +25,9 @@ export class EditorBinding {
 	) {
 		this.onVisibilityChange = () => {
 			if (document.visibilityState === 'visible' && this.currentAwareness && this.currentPath) {
-				const leaf = this.app.workspace.activeLeaf ?? null;
-				const view = leaf && leaf.view instanceof MarkdownView
-					? (leaf.view as unknown as { editor?: { cm?: EditorView } }).editor?.cm
+				const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				const view = mdView?.editor
+					? (mdView.editor as unknown as { cm?: EditorView }).cm
 					: null;
 				if (view && !(view as unknown as { destroyed?: boolean }).destroyed) {
 					try {
@@ -87,19 +87,18 @@ export class EditorBinding {
 			return false;
 		}
 
-		let leaf: any = null;
 		let view: EditorView | null = null;
 
 		for (let attempt = 0; attempt < 5; attempt++) {
-			leaf = this.app.workspace.activeLeaf ?? null;
-			if (leaf && leaf.view instanceof MarkdownView) {
-				const cm = (leaf.view as unknown as { editor?: { cm?: EditorView } }).editor?.cm;
+			const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (mdView?.editor) {
+				const cm = (mdView.editor as unknown as { cm?: EditorView }).cm;
 				if (cm && !(cm as unknown as { destroyed?: boolean }).destroyed) {
 					view = cm;
 					break;
 				}
 			}
-			await new Promise((resolve) => setTimeout(resolve, 40));
+			await new Promise((resolve) => window.setTimeout(resolve, 40));
 			if (this.activationGen !== gen) return false;
 		}
 

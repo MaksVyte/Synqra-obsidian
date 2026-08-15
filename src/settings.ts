@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { App, Modal, Notice, PluginSettingTab, requestUrl, Setting } from 'obsidian';
 import type CollabPlugin from './main';
 import {
 	CURSOR_COLOR_PRESETS,
@@ -8,6 +8,41 @@ import {
 	type RoomInfo,
 } from './types';
 import { toHttpUrl } from './utils';
+
+class ConfirmDeleteModal extends Modal {
+	constructor(app: App, private roomId: string, private onConfirm: () => Promise<void>) {
+		super(app);
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+		new Setting(contentEl).setName(`Delete Room '${this.roomId}'?`).setHeading();
+		contentEl.createEl('p', {
+			text: `Are you sure you want to delete room '${this.roomId}' from the server? All notes, history, and files in this room will be permanently erased.`,
+		});
+
+		new Setting(contentEl)
+			.addButton((btn) =>
+				btn.setButtonText('Cancel').onClick(() => {
+					this.close();
+				}),
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText('Delete Permanently')
+					.setWarning()
+					.onClick(async () => {
+						this.close();
+						await this.onConfirm();
+					}),
+			);
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
 
 export class CollabSettingTab extends PluginSettingTab {
 	plugin: CollabPlugin;
@@ -26,7 +61,14 @@ export class CollabSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl('h2', { text: 'Synqra - Live Collaboration' });
+		new Setting(containerEl).setName('Synqra - Live Collaboration').setHeading();
+
+		// Warning banner
+		const banner = containerEl.createDiv({ cls: 'synqra-warning' });
+		banner.createEl('h2', { text: '⚠️ Shared Vault Warning' });
+		banner.createEl('p', {
+			text: 'Connecting to a room will sync your local vault with the server. Any local files not present on the server will be moved to your local system trash.',
+		});
 
 		// --- Connection & Server Settings ---
 		new Setting(containerEl)
@@ -58,10 +100,11 @@ export class CollabSettingTab extends PluginSettingTab {
 					});
 			})
 			.addExtraButton((btn) => {
-				btn.setIcon('eye')
+				btn
+					.setIcon('eye')
 					.setTooltip('Toggle password visibility')
 					.onClick(() => {
-						const input = containerEl.querySelector('input[placeholder="Server password"]') as HTMLInputElement | null;
+						const input = btn.extraSettingsEl.parentElement?.querySelector('input');
 						if (input) {
 							input.type = input.type === 'password' ? 'text' : 'password';
 						}
@@ -70,51 +113,32 @@ export class CollabSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Display name')
-			.setDesc('The name other collaborators see for you.')
+			.setDesc('The name shown to other collaborators.')
 			.addText((text) =>
 				text
-					.setPlaceholder('User 1234')
+					.setPlaceholder(getRandomUsername())
 					.setValue(this.plugin.settings.displayName)
 					.onChange(async (value) => {
-						this.plugin.settings.displayName = value.trim() || DEFAULT_SETTINGS.displayName;
+						this.plugin.settings.displayName = value.trim() || getRandomUsername();
 						await this.plugin.saveSettings();
 						this.plugin.scheduleReconnect();
-					}),
-			)
-			.addButton((button) =>
-				button
-					.setButtonText('Randomize')
-					.setTooltip('Randomize display name')
-					.onClick(async () => {
-						this.plugin.settings.displayName = getRandomUsername();
-						await this.plugin.saveSettings();
-						this.plugin.scheduleReconnect();
-						this.display();
 					}),
 			);
 
 		const colorSetting = new Setting(containerEl)
 			.setName('Cursor color')
-			.setDesc('Choose your cursor color from 10 preset colors.');
+			.setDesc('Color of your cursor and selection as seen by other peers.');
 
-		colorSetting.addDropdown((dropdown) => {
-			CURSOR_COLOR_PRESETS.forEach((preset) => {
-				dropdown.addOption(preset.hex, `${preset.name} (${preset.hex})`);
-			});
-			if (!CURSOR_COLOR_PRESETS.some((p) => p.hex.toLowerCase() === this.plugin.settings.cursorColor.toLowerCase())) {
-				dropdown.addOption(
-					this.plugin.settings.cursorColor,
-					`Custom (${this.plugin.settings.cursorColor})`,
-				);
-			}
-			dropdown
+		colorSetting.addText((text) =>
+			text
+				.setPlaceholder('#30bced')
 				.setValue(this.plugin.settings.cursorColor)
 				.onChange(async (value) => {
-					this.plugin.settings.cursorColor = value;
+					this.plugin.settings.cursorColor = value.trim();
 					await this.plugin.saveSettings();
 					this.plugin.scheduleReconnect();
-				});
-		});
+				}),
+		);
 
 		colorSetting.addButton((button) =>
 			button
@@ -130,7 +154,7 @@ export class CollabSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Room ID')
-			.setDesc('The collaboration room ID provided by your server admin (e.g. vault-a).')
+			.setDesc('The collaboration room. Peers must use the same room ID to share a vault.')
 			.addText((text) =>
 				text
 					.setPlaceholder('vault-a')
@@ -153,13 +177,17 @@ export class CollabSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Connection actions')
-			.setDesc('Manually reconnect or force a full manifest sync.')
+			.setName('Reconnect now')
+			.setDesc('Close the current connection and reconnect with the latest settings.')
 			.addButton((button) =>
-				button.setButtonText('Reconnect now').onClick(() => {
+				button.setButtonText('Reconnect').onClick(() => {
 					this.plugin.scheduleReconnect();
 				}),
-			)
+			);
+
+		new Setting(containerEl)
+			.setName('Sync vault manifest')
+			.setDesc('Force a full scan and publish of the vault manifest to peers.')
 			.addButton((button) =>
 				button.setButtonText('Publish manifest').onClick(() => {
 					void this.plugin.publishManifest();
@@ -168,7 +196,7 @@ export class CollabSettingTab extends PluginSettingTab {
 
 		// --- Admin Panel Section ---
 		containerEl.createEl('hr', { cls: 'collab-divider' });
-		containerEl.createEl('h3', { text: 'Server Admin Controls' });
+		new Setting(containerEl).setName('Server Admin Controls').setHeading();
 		containerEl.createEl('p', {
 			text: 'Enter the server Admin Password to create, manage, and delete collaboration rooms on this server.',
 			cls: 'setting-item-description',
@@ -200,7 +228,7 @@ export class CollabSettingTab extends PluginSettingTab {
 
 		if (this.isAdminUnlocked) {
 			const adminBox = containerEl.createDiv({ cls: 'collab-admin-panel' });
-			adminBox.createEl('h4', { text: 'Create New Room' });
+			new Setting(adminBox).setName('Create New Room').setHeading();
 
 			new Setting(adminBox)
 				.setName('New Room ID')
@@ -234,7 +262,7 @@ export class CollabSettingTab extends PluginSettingTab {
 						}),
 				);
 
-			adminBox.createEl('h4', { text: 'Registered Rooms on Server' });
+			new Setting(adminBox).setName('Registered Rooms on Server').setHeading();
 
 			if (this.isLoadingRooms) {
 				adminBox.createEl('p', { text: 'Loading rooms from server...', cls: 'setting-item-description' });
@@ -265,13 +293,10 @@ export class CollabSettingTab extends PluginSettingTab {
 						btn
 							.setButtonText('Delete Room')
 							.setWarning()
-							.onClick(async () => {
-								const confirmed = confirm(
-									`Are you sure you want to delete room '${room.id}' from the server?\n\nAll notes, history, and files in this room will be permanently erased.`,
-								);
-								if (confirmed) {
+							.onClick(() => {
+								new ConfirmDeleteModal(this.app, room.id, async () => {
 									await this.deleteRoomOnServer(room.id);
-								}
+								}).open();
 							}),
 					);
 				}
@@ -291,16 +316,18 @@ export class CollabSettingTab extends PluginSettingTab {
 
 		try {
 			this.isLoadingRooms = true;
-			const verifyRes = await fetch(`${httpUrl}${sep}api/admin/verify`, {
+			const verifyRes = await requestUrl({
+				url: `${httpUrl}${sep}api/admin/verify`,
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${adminPass}`,
 				},
 				body: JSON.stringify({ adminPassword: adminPass }),
+				throw: false,
 			});
 
-			if (!verifyRes.ok) {
+			if (verifyRes.status !== 200) {
 				this.isAdminUnlocked = false;
 				new Notice('Admin verification failed: Invalid admin password');
 				this.display();
@@ -323,16 +350,23 @@ export class CollabSettingTab extends PluginSettingTab {
 		const httpUrl = toHttpUrl(this.plugin.settings.serverUrl);
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
-		const res = await fetch(`${httpUrl}${sep}api/admin/rooms`, {
-			headers: {
-				Authorization: `Bearer ${adminPass}`,
-			},
-		});
+		try {
+			const res = await requestUrl({
+				url: `${httpUrl}${sep}api/admin/rooms`,
+				method: 'GET',
+				headers: {
+					Authorization: `Bearer ${adminPass}`,
+				},
+				throw: false,
+			});
 
-		if (res.ok) {
-			const data = (await res.json()) as { rooms: RoomInfo[] };
-			this.adminRooms = data.rooms || [];
-		} else {
+			if (res.status === 200) {
+				const data = res.json as { rooms: RoomInfo[] };
+				this.adminRooms = data.rooms || [];
+			} else {
+				new Notice('Failed to load room list from server');
+			}
+		} catch {
 			new Notice('Failed to load room list from server');
 		}
 	}
@@ -343,24 +377,26 @@ export class CollabSettingTab extends PluginSettingTab {
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
 		try {
-			const res = await fetch(`${httpUrl}${sep}api/admin/rooms`, {
+			const res = await requestUrl({
+				url: `${httpUrl}${sep}api/admin/rooms`,
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${adminPass}`,
 				},
 				body: JSON.stringify({ roomId, description }),
+				throw: false,
 			});
 
-			if (res.ok) {
+			if (res.status === 200) {
 				new Notice(`Room '${roomId}' created successfully!`);
 				this.newRoomId = '';
 				this.newRoomDesc = '';
 				await this.fetchRoomsList();
 				this.display();
 			} else {
-				const json = await res.json();
-				new Notice(`Error creating room: ${json.error ?? 'Unknown error'}`);
+				const json = res.json as { error?: string };
+				new Notice(`Error creating room: ${json?.error ?? 'Unknown error'}`);
 			}
 		} catch (err) {
 			new Notice(`Error creating room: ${err instanceof Error ? err.message : String(err)}`);
@@ -373,14 +409,16 @@ export class CollabSettingTab extends PluginSettingTab {
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
 		try {
-			const res = await fetch(`${httpUrl}${sep}api/admin/rooms/${encodeURIComponent(roomId)}`, {
+			const res = await requestUrl({
+				url: `${httpUrl}${sep}api/admin/rooms/${encodeURIComponent(roomId)}`,
 				method: 'DELETE',
 				headers: {
 					Authorization: `Bearer ${adminPass}`,
 				},
+				throw: false,
 			});
 
-			if (res.ok) {
+			if (res.status === 200) {
 				new Notice(`Room '${roomId}' deleted from server.`);
 				if (this.plugin.settings.roomId === roomId) {
 					this.plugin.settings.roomId = 'vault-a';
@@ -390,8 +428,8 @@ export class CollabSettingTab extends PluginSettingTab {
 				await this.fetchRoomsList();
 				this.display();
 			} else {
-				const json = await res.json();
-				new Notice(`Error deleting room: ${json.error ?? 'Unknown error'}`);
+				const json = res.json as { error?: string };
+				new Notice(`Error deleting room: ${json?.error ?? 'Unknown error'}`);
 			}
 		} catch (err) {
 			new Notice(`Error deleting room: ${err instanceof Error ? err.message : String(err)}`);

@@ -15,7 +15,7 @@ import {
 	encodeMuxMessage,
 } from './muxProtocol';
 
-import { Notice } from 'obsidian';
+import { Notice, requestUrl } from 'obsidian';
 import { normalizePath, toHttpUrl, toWsUrl } from './utils';
 
 const SYNC_STEP2 = 1;
@@ -281,20 +281,18 @@ export class SyncManager {
 					const httpBase = toHttpUrl(serverUrl);
 					const sep = httpBase.endsWith('/') ? '' : '/';
 					const probeUrl = `${httpBase}${sep}file/${encodeURIComponent(roomId)}/__probe__${passParam ? '?' + passParam.slice(1) : ''}`;
-					const res = await fetch(probeUrl);
+					const res = await requestUrl({ url: probeUrl, throw: false });
 					if (res.status === 401) {
 						new Notice('[Synqra] Authentication error: Invalid server password. Please check your settings.');
 						this.shouldConnect = false;
 						return;
 					} else if (res.status === 404) {
-						try {
-							const json = await res.json();
-							if (json?.error && json.error.includes('Room')) {
-								new Notice(`[Synqra] Room '${roomId}' does not exist on the server. Ask an admin to create it.`);
-								this.shouldConnect = false;
-								return;
-							}
-						} catch {}
+						const json = res.json as { error?: string };
+						if (json?.error && json.error.includes('Room')) {
+							new Notice(`[Synqra] Room '${roomId}' does not exist on the server. Ask an admin to create it.`);
+							this.shouldConnect = false;
+							return;
+						}
 					}
 				} catch {}
 			}

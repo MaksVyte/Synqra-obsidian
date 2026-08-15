@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile } from 'obsidian';
+import { Notice, Plugin } from 'obsidian';
 import { CollabSettingTab } from './settings';
 import { DEFAULT_SETTINGS, getRandomPresetColor, getRandomUsername, type CollabSettings, type ConnectionStatus } from './types';
 import { SyncManager } from './syncManager';
@@ -40,9 +40,9 @@ export default class CollabPlugin extends Plugin {
 
 		this.controlChannel = new ControlChannel(() => this.settings);
 
-		this.exclusionManager = new ExclusionManager();
+		this.exclusionManager = new ExclusionManager(this.app.vault);
 		this.fileOpsManager = new FileOpsManager(this.app, this.app.vault, this.app.fileManager);
-		this.manifestManager = new ManifestManager(this.app.vault, this.exclusionManager);
+		this.manifestManager = new ManifestManager(this.app.vault, this.exclusionManager, this.app.fileManager);
 		this.backgroundSync = new BackgroundSync(
 			this.app.vault,
 			this.syncManager,
@@ -238,7 +238,7 @@ export default class CollabPlugin extends Plugin {
 					const localPath = toLocalPath(path);
 					const prefix = localPath.endsWith('/') ? localPath : localPath + '/';
 					this.app.workspace.iterateAllLeaves((leaf) => {
-						const view = leaf.view as any;
+						const view = leaf.view as { file?: { path: string } };
 						const p = view?.file?.path;
 						if (p && (p === localPath || p.startsWith(prefix))) {
 							leaf.detach();
@@ -249,9 +249,9 @@ export default class CollabPlugin extends Plugin {
 					if (file) {
 						this.fileOpsManager.mutePathEvents(localPath);
 						try {
-							await this.app.vault.delete(file, true);
+							await this.app.fileManager.trashFile(file);
 						} catch {} finally {
-							setTimeout(() => this.fileOpsManager.unmutePathEvents(localPath), VAULT_EVENT_SETTLE_MS);
+							window.setTimeout(() => this.fileOpsManager.unmutePathEvents(localPath), VAULT_EVENT_SETTLE_MS);
 						}
 					}
 				}

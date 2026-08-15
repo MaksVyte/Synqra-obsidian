@@ -51,21 +51,19 @@ export class ExcalidrawBinding {
 			this.currentCursorUser = cursorUser;
 		}
 
-		let leaf: WorkspaceLeaf | null = null;
 		let excalidrawView: unknown = null;
 		let excalidrawAPI: any = null;
 
 		for (let attempt = 0; attempt < 8; attempt++) {
-			leaf = this.app.workspace.activeLeaf ?? null;
-			if (leaf) {
-				const view = leaf.view as any;
+			this.app.workspace.iterateAllLeaves((l) => {
+				const view = l.view as { getViewType?: () => string; excalidrawAPI?: unknown };
 				if (view && (view.getViewType?.() === 'excalidraw' || view.excalidrawAPI)) {
 					excalidrawView = view;
 					excalidrawAPI = view.excalidrawAPI;
-					if (excalidrawAPI) break;
 				}
-			}
-			await new Promise((resolve) => setTimeout(resolve, 50));
+			});
+			if (excalidrawAPI) break;
+			await new Promise((resolve) => window.setTimeout(resolve, 50));
 			if (this.activationGen !== gen) return false;
 		}
 
@@ -213,7 +211,7 @@ export class ExcalidrawBinding {
 
 				if (payload.button === 'up') {
 					// Finalize shape/stroke/erase on pointer release
-					setTimeout(() => {
+					window.setTimeout(() => {
 						this.syncLocalChanges(excalidrawAPI, yElements, docHandle.doc);
 					}, 10);
 				}
@@ -237,7 +235,7 @@ export class ExcalidrawBinding {
 			};
 
 			const onPointerUp = () => {
-				setTimeout(() => {
+				window.setTimeout(() => {
 					this.syncLocalChanges(excalidrawAPI, yElements, docHandle.doc);
 				}, 10);
 			};
