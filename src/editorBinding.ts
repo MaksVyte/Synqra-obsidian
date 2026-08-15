@@ -91,8 +91,12 @@ export class EditorBinding {
 
 		let view: EditorView | null = null;
 
-		for (let attempt = 0; attempt < 5; attempt++) {
-			const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		for (let attempt = 0; attempt < 8; attempt++) {
+			const mdView =
+				this.app.workspace.getActiveViewOfType(MarkdownView) ??
+				(this.app.workspace.activeLeaf?.view instanceof MarkdownView
+					? this.app.workspace.activeLeaf.view
+					: null);
 			if (mdView?.editor) {
 				const cm = (mdView.editor as unknown as { cm?: EditorView }).cm;
 				if (cm && !(cm as unknown as { destroyed?: boolean }).destroyed) {

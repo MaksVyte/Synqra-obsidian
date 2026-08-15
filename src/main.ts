@@ -71,9 +71,9 @@ export default class CollabPlugin extends Plugin {
 			this.controlChannel.send({ type: 'file-op', op });
 		});
 
-		this.controlChannel.onMessage((msg) => {
+		this.controlChannel.onMessage(async (msg) => {
 			if (msg.type === 'file-op') {
-				void this.fileOpsManager.applyRemoteOp(msg.op);
+				await this.fileOpsManager.applyRemoteOp(msg.op);
 			}
 		});
 

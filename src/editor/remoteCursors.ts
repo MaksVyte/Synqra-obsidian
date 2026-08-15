@@ -123,14 +123,14 @@ export function createRemoteCursorPlugin(
 ): Extension {
 	const awarenessTracker = ViewPlugin.fromClass(
 		class {
-			view: EditorView;
-			listener: () => void;
+			private readonly listener: (changes: { added: number[]; updated: number[]; removed: number[] }) => void;
 
-			constructor(view: EditorView) {
-				this.view = view;
-				this.listener = () => {
-					// Trigger layer re-render when awareness updates
-					this.view.requestMeasure();
+			constructor(readonly view: EditorView) {
+				this.listener = ({ added, updated, removed }) => {
+					const clients = added.concat(updated, removed);
+					if (clients.some((id) => id !== awareness.doc.clientID)) {
+						view.dispatch({ annotations: [remoteCursorsAnnotation.of(clients)] });
+					}
 				};
 				awareness.on('change', this.listener);
 			}

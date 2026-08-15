@@ -108,13 +108,20 @@ export class FileOpsManager {
 			switch (op.type) {
 				case 'create': {
 					const exists = this.vault.getAbstractFileByPath(op.path);
-					if (exists) break;
-					const parentDir = op.path.substring(0, op.path.lastIndexOf('/'));
-					if (parentDir) await ensureFolder(this.vault, parentDir);
-					if (op.binary) {
-						await this.vault.createBinary(op.path, new ArrayBuffer(0));
-					} else {
-						await this.vault.create(op.path, '');
+					if (exists && exists instanceof TFile) {
+						if (op.binary) {
+							await this.vault.modifyBinary(exists, base64ToArrayBuffer(op.content));
+						} else {
+							await this.vault.modify(exists, op.content);
+						}
+					} else if (!exists) {
+						const parentDir = op.path.substring(0, op.path.lastIndexOf('/'));
+						if (parentDir) await ensureFolder(this.vault, parentDir);
+						if (op.binary) {
+							await this.vault.createBinary(op.path, base64ToArrayBuffer(op.content));
+						} else {
+							await this.vault.create(op.path, op.content);
+						}
 					}
 					break;
 				}
