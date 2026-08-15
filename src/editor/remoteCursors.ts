@@ -74,18 +74,17 @@ class RemoteCursorMarker implements LayerMarker {
 	draw(): HTMLElement {
 		const container = createDiv({ cls: 'cm-remote-cursor-container' });
 		container.style.setProperty('top', `${this.top}px`);
-		container.style.setProperty('left', `${this.left}px`);
+		container.style.setProperty('left', `${this.left - 6}px`);
 		container.style.setProperty('height', `${this.height}px`);
 
 		const caret = container.createDiv({ cls: 'cm-remote-cursor-caret' });
 		caret.style.setProperty('background-color', this.color);
-		caret.style.setProperty('box-shadow', `0 0 4px ${this.color}88`);
 
-		const label = container.createDiv({
-			cls: 'cm-remote-cursor-label',
+		const badge = container.createDiv({
+			cls: 'cm-remote-cursor-badge',
 			text: this.name,
 		});
-		label.style.setProperty('background-color', this.color);
+		badge.style.setProperty('background-color', this.color);
 
 		return container;
 	}
@@ -97,7 +96,7 @@ class RemoteCursorMarker implements LayerMarker {
 			prev.name === this.name
 		) {
 			dom.style.setProperty('top', `${this.top}px`);
-			dom.style.setProperty('left', `${this.left}px`);
+			dom.style.setProperty('left', `${this.left - 6}px`);
 			dom.style.setProperty('height', `${this.height}px`);
 			return true;
 		}

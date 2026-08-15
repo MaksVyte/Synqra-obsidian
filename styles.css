@@ -44,6 +44,7 @@
 	height: 100%;
 	pointer-events: none;
 	user-select: none;
+	border-radius: 1px;
 }
 
 .cm-remote-cursor-badge {
@@ -62,14 +63,13 @@
 	pointer-events: none;
 	user-select: none;
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-	opacity: 0;
-	transform: translateY(2px) scale(0.95);
-	transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
+	opacity: 0.9;
+	transform: translateY(0);
+	transition: opacity 0.15s ease-in-out;
 }
 
 .cm-remote-cursor-container:hover .cm-remote-cursor-badge {
 	opacity: 1;
-	transform: translateY(0) scale(1);
 }
 
 .cm-remote-selection-box {
