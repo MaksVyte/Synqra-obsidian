@@ -149,7 +149,9 @@ export class ManifestManager {
 		for (const item of filesToPurge) {
 			mute?.(item.path);
 			try {
-				await this.vault.delete(item, true);
+				if (this.fileManager) {
+					await this.fileManager.trashFile(item);
+				}
 				purged++;
 			} catch {} finally {
 				if (unmute) window.setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
@@ -159,7 +161,9 @@ export class ManifestManager {
 		for (const item of foldersToPurge) {
 			mute?.(item.path);
 			try {
-				await this.vault.delete(item, true);
+				if (this.fileManager) {
+					await this.fileManager.trashFile(item);
+				}
 				purged++;
 			} catch {} finally {
 				if (unmute) window.setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);

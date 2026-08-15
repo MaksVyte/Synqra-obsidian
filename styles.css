@@ -8,9 +8,10 @@
 	margin-bottom: 16px;
 }
 
-.synqra-warning h2 {
+.synqra-warning-title {
 	margin: 0 0 4px 0;
 	font-size: 1.2em;
+	font-weight: bold;
 	color: inherit;
 }
 

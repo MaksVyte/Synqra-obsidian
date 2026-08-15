@@ -1,4 +1,4 @@
-import { App, Notice, TFile, WorkspaceLeaf } from 'obsidian';
+import { App, Notice, TFile } from 'obsidian';
 import * as Y from 'yjs';
 import type * as awarenessProtocol from 'y-protocols/awareness';
 import type { SyncManager } from '../syncManager';
@@ -16,9 +16,27 @@ export interface ExcalidrawCollaborator {
 	selectedElementIds?: Record<string, boolean>;
 }
 
-function getElementFingerprint(el: any): string {
-	const pointsLen = el.points ? el.points.length : 0;
-	return `${el.id}_${el.version}_${el.versionNonce}_${el.x}_${el.y}_${el.width}_${el.height}_${pointsLen}_${el.isDeleted ? 1 : 0}_${el.text || ''}`;
+export interface ExcalidrawApi {
+	getSceneElementsIncludingDeleted?: () => ExcalidrawElementStub[];
+	getSceneElements?: () => ExcalidrawElementStub[];
+	getAppState?: () => { zoom?: { value?: number }; scrollX?: number; scrollY?: number; editingElement?: { id?: string }; draggingElement?: { id?: string }; resizingElement?: { id?: string } };
+	updateScene: (sceneData: { elements?: ExcalidrawElementStub[]; collaborators?: Map<string, ExcalidrawCollaborator>; commitToHistory?: boolean }) => void;
+	onPointerUpdate?: (cb: (payload: { pointer: { x: number; y: number }; button: 'down' | 'up'; pointersMap?: Map<number, unknown> }) => void) => () => void;
+}
+
+function getElementFingerprint(el: Record<string, unknown>): string {
+	const points = Array.isArray(el.points) ? el.points : [];
+	const pointsLen = points.length;
+	const id = String(el.id ?? '');
+	const version = String(el.version ?? '');
+	const nonce = String(el.versionNonce ?? '');
+	const x = String(el.x ?? '');
+	const y = String(el.y ?? '');
+	const w = String(el.width ?? '');
+	const h = String(el.height ?? '');
+	const del = el.isDeleted ? 1 : 0;
+	const text = String(el.text ?? '');
+	return `${id}_${version}_${nonce}_${x}_${y}_${w}_${h}_${pointsLen}_${del}_${text}`;
 }
 
 export class ExcalidrawBinding {
@@ -52,14 +70,14 @@ export class ExcalidrawBinding {
 		}
 
 		let excalidrawView: unknown = null;
-		let excalidrawAPI: any = null;
+		let excalidrawAPI: ExcalidrawApi | null = null;
 
 		for (let attempt = 0; attempt < 8; attempt++) {
 			this.app.workspace.iterateAllLeaves((l) => {
-				const view = l.view as { getViewType?: () => string; excalidrawAPI?: unknown };
+				const view = l.view as { getViewType?: () => string; excalidrawAPI?: ExcalidrawApi };
 				if (view && (view.getViewType?.() === 'excalidraw' || view.excalidrawAPI)) {
 					excalidrawView = view;
-					excalidrawAPI = view.excalidrawAPI;
+					excalidrawAPI = view.excalidrawAPI ?? null;
 				}
 			});
 			if (excalidrawAPI) break;
@@ -102,6 +120,7 @@ export class ExcalidrawBinding {
 
 		if (this.activationGen !== gen) return false;
 
+		const activeAPI: ExcalidrawApi = excalidrawAPI as ExcalidrawApi;
 		const yElements = docHandle.doc.getMap<string>('excalidraw_elements');
 		this.currentAwareness = docHandle.awareness;
 
@@ -119,37 +138,35 @@ export class ExcalidrawBinding {
 			});
 		}
 
-		// Initial sync between Yjs elements map and local Excalidraw scene (including deleted elements)
-		const initialSceneElements = (excalidrawAPI.getSceneElementsIncludingDeleted?.() ||
-			excalidrawAPI.getSceneElements?.() ||
+		// Initial sync between Yjs elements map and local Excalidraw scene
+		const initialSceneElements = (activeAPI.getSceneElementsIncludingDeleted?.() ||
+			activeAPI.getSceneElements?.() ||
 			[]) as ExcalidrawElementStub[];
 		if (yElements.size === 0 && initialSceneElements.length > 0) {
-			// Brand new Yjs doc: populate Yjs map from initial local scene
 			docHandle.doc.transact(() => {
 				for (const el of initialSceneElements) {
 					yElements.set(el.id, JSON.stringify(el));
 					if (!el.isDeleted) {
-						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el));
+						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el as unknown as Record<string, unknown>));
 					}
 				}
 			}, 'local');
 		} else if (yElements.size > 0) {
-			// Existing Yjs doc: populate local scene from Yjs map
 			const remoteElements: ExcalidrawElementStub[] = [];
 			for (const raw of yElements.values()) {
 				try {
-					remoteElements.push(JSON.parse(raw));
+					remoteElements.push(JSON.parse(raw) as ExcalidrawElementStub);
 				} catch {}
 			}
 			const merged = reconcileExcalidrawElements(initialSceneElements, remoteElements);
 			this.isApplyingRemote = true;
 			try {
-				excalidrawAPI.updateScene({ elements: merged, commitToHistory: false });
+				activeAPI.updateScene({ elements: merged, commitToHistory: false });
 				for (const el of merged) {
 					if (el.isDeleted) {
 						this.lastBroadcastFingerprints.delete(el.id);
 					} else {
-						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el));
+						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el as unknown as Record<string, unknown>));
 					}
 				}
 			} finally {
@@ -157,36 +174,36 @@ export class ExcalidrawBinding {
 			}
 		}
 
-		// Observe remote element updates (CRITICAL: ignore local transactions to prevent self-interruption)
+		// Observe remote element updates
 		this.yElementsObserver = (_event: Y.YMapEvent<string>, transaction: Y.Transaction) => {
 			if (transaction.local || this.isApplyingRemote) return;
 
-			const appState = excalidrawAPI.getAppState?.() || {};
+			const appState = activeAPI.getAppState?.() || {};
 			const activeId =
 				appState.editingElement?.id ||
 				appState.draggingElement?.id ||
 				appState.resizingElement?.id;
 
-			const currentLocal = (excalidrawAPI.getSceneElementsIncludingDeleted?.() ||
-				excalidrawAPI.getSceneElements?.() ||
+			const currentLocal = (activeAPI.getSceneElementsIncludingDeleted?.() ||
+				activeAPI.getSceneElements?.() ||
 				[]) as ExcalidrawElementStub[];
 			const currentRemote: ExcalidrawElementStub[] = [];
 			for (const raw of yElements.values()) {
 				try {
-					currentRemote.push(JSON.parse(raw));
+					currentRemote.push(JSON.parse(raw) as ExcalidrawElementStub);
 				} catch {}
 			}
 
 			const reconciled = reconcileExcalidrawElements(currentLocal, currentRemote, activeId);
 			this.isApplyingRemote = true;
 			try {
-				excalidrawAPI.updateScene({ elements: reconciled, commitToHistory: false });
+				activeAPI.updateScene({ elements: reconciled, commitToHistory: false });
 				for (const el of reconciled) {
 					if (el.id !== activeId) {
 						if (el.isDeleted) {
 							this.lastBroadcastFingerprints.delete(el.id);
 						} else {
-							this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el));
+							this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el as unknown as Record<string, unknown>));
 						}
 					}
 				}
@@ -197,34 +214,31 @@ export class ExcalidrawBinding {
 		yElements.observe(this.yElementsObserver);
 
 		// Observe local pointer updates to broadcast live cursor
-		if (typeof excalidrawAPI.onPointerUpdate === 'function') {
-			this.unsubscribePointer = excalidrawAPI.onPointerUpdate((payload: {
+		if (typeof activeAPI.onPointerUpdate === 'function') {
+			this.unsubscribePointer = activeAPI.onPointerUpdate((payload: {
 				pointer: { x: number; y: number };
 				button: 'down' | 'up';
 				pointersMap?: Map<number, unknown>;
 			}) => {
 				if (!this.currentAwareness) return;
-				const selectedElementIds = excalidrawAPI.getAppState?.()?.selectedElementIds || {};
 				this.currentAwareness.setLocalStateField('pointer', payload.pointer);
 				this.currentAwareness.setLocalStateField('button', payload.button);
-				this.currentAwareness.setLocalStateField('selectedElementIds', selectedElementIds);
 
 				if (payload.button === 'up') {
-					// Finalize shape/stroke/erase on pointer release
 					window.setTimeout(() => {
-						this.syncLocalChanges(excalidrawAPI, yElements, docHandle.doc);
+						this.syncLocalChanges(activeAPI, yElements, docHandle.doc);
 					}, 10);
 				}
 			});
 		}
 
 		// DOM pointer & touch listeners on container for cross-platform / mobile responsiveness
-		const viewDom = (excalidrawView as any)?.contentEl as HTMLElement | undefined;
+		const viewDom = (excalidrawView as { contentEl?: HTMLElement })?.contentEl;
 		if (viewDom) {
 			const onPointerMove = (e: PointerEvent | TouchEvent) => {
 				if ('clientX' in e && this.currentAwareness) {
 					const rect = viewDom.getBoundingClientRect();
-					const appState = excalidrawAPI.getAppState?.() || {};
+					const appState = activeAPI.getAppState?.() || {};
 					const zoom = appState.zoom?.value || 1;
 					const scrollX = appState.scrollX || 0;
 					const scrollY = appState.scrollY || 0;
@@ -236,7 +250,7 @@ export class ExcalidrawBinding {
 
 			const onPointerUp = () => {
 				window.setTimeout(() => {
-					this.syncLocalChanges(excalidrawAPI, yElements, docHandle.doc);
+					this.syncLocalChanges(activeAPI, yElements, docHandle.doc);
 				}, 10);
 			};
 
@@ -255,43 +269,44 @@ export class ExcalidrawBinding {
 
 		// Observe remote awareness to render collaborators on canvas in real-time
 		this.awarenessObserver = () => {
-			if (!this.currentAwareness || !excalidrawAPI) return;
+			if (!this.currentAwareness) return;
 			const collaborators = new Map<string, ExcalidrawCollaborator>();
 			const localClientId = docHandle.awareness.doc.clientID;
 
-			docHandle.awareness.getStates().forEach((state: any, clientId: number) => {
+			docHandle.awareness.getStates().forEach((state: unknown, clientId: number) => {
 				if (clientId === localClientId) return;
-				if (!state || !state.pointer) return;
+				const s = state as { pointer?: { x: number; y: number }; button?: 'down' | 'up'; user?: { color?: string; name?: string }; selectedElementIds?: Record<string, boolean> };
+				if (!s || !s.pointer) return;
 
-				const { color = '#30bced', name = 'Anonymous' } = state.user || {};
+				const { color = '#30bced', name = 'Anonymous' } = s.user || {};
 				collaborators.set(clientId.toString(), {
-					pointer: state.pointer,
-					button: state.button || 'up',
+					pointer: s.pointer,
+					button: s.button || 'up',
 					username: name,
 					color: {
 						background: color,
 						stroke: color,
 					},
-					selectedElementIds: state.selectedElementIds || {},
+					selectedElementIds: s.selectedElementIds || {},
 				});
 			});
 
 			try {
-				excalidrawAPI.updateScene({ collaborators });
+				activeAPI.updateScene({ collaborators });
 			} catch {}
 		};
 		docHandle.awareness.on('change', this.awarenessObserver);
 
 		// High-frequency sync loop (every 40ms) to detect and broadcast strokes & erasures in real time
 		this.syncIntervalTimer = window.setInterval(() => {
-			this.syncLocalChanges(excalidrawAPI, yElements, docHandle.doc);
+			this.syncLocalChanges(activeAPI, yElements, docHandle.doc);
 		}, 40);
 
 		return true;
 	}
 
 	private syncLocalChanges(
-		excalidrawAPI: any,
+		excalidrawAPI: ExcalidrawApi,
 		yElements: Y.Map<string>,
 		ydoc: Y.Doc,
 	): void {
@@ -314,7 +329,7 @@ export class ExcalidrawBinding {
 				}
 				continue;
 			}
-			const fp = getElementFingerprint(el);
+			const fp = getElementFingerprint(el as unknown as Record<string, unknown>);
 			const lastFp = this.lastBroadcastFingerprints.get(el.id);
 			if (lastFp !== fp) {
 				changed.push(el);
@@ -339,7 +354,6 @@ export class ExcalidrawBinding {
 					yElements.set(el.id, JSON.stringify(el));
 				}
 				for (const id of deletedIds) {
-					// Mark as deleted in Yjs map so remote peers erase it cleanly
 					yElements.set(
 						id,
 						JSON.stringify({

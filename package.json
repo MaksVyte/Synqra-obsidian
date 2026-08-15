@@ -1,6 +1,6 @@
 {
 	"name": "synqra",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Real-time multi-user live collaboration, note syncing, and Excalidraw drawing for Obsidian via a self-hosted relay server.",
 	"main": "main.js",
 	"type": "module",

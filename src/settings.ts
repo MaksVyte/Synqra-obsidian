@@ -1,7 +1,6 @@
 import { App, Modal, Notice, PluginSettingTab, requestUrl, Setting } from 'obsidian';
 import type CollabPlugin from './main';
 import {
-	CURSOR_COLOR_PRESETS,
 	DEFAULT_SETTINGS,
 	getRandomPresetColor,
 	getRandomUsername,
@@ -61,11 +60,11 @@ export class CollabSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl).setName('Synqra - Live Collaboration').setHeading();
+		new Setting(containerEl).setName('Connection').setHeading();
 
 		// Warning banner
 		const banner = containerEl.createDiv({ cls: 'synqra-warning' });
-		banner.createEl('h2', { text: '⚠️ Shared Vault Warning' });
+		banner.createDiv({ cls: 'synqra-warning-title', text: '⚠️ Shared Vault Warning' });
 		banner.createEl('p', {
 			text: 'Connecting to a room will sync your local vault with the server. Any local files not present on the server will be moved to your local system trash.',
 		});
