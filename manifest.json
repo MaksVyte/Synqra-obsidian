@@ -1,7 +1,7 @@
 {
 	"id": "synqra",
 	"name": "Synqra",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"minAppVersion": "1.7.0",
 	"description": "Real-time multi-user live collaboration, note syncing, and Excalidraw drawing via a self-hosted relay server.",
 	"author": "MaksVyte",

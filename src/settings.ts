@@ -56,6 +56,39 @@ export class CollabSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	getSettingDefinitions() {
+		return [
+			{
+				name: 'Server URL',
+				description: 'WebSocket endpoint of the collab server',
+			},
+			{
+				name: 'Server Password',
+				description: 'Password required by the host to connect to this server',
+			},
+			{
+				name: 'Display name',
+				description: 'The name shown to other collaborators',
+			},
+			{
+				name: 'Cursor color',
+				description: 'Color of your cursor and selection as seen by other peers',
+			},
+			{
+				name: 'Room ID',
+				description: 'The collaboration room ID to share a vault',
+			},
+			{
+				name: 'Auto-connect on startup',
+				description: 'Connect to the room automatically when Obsidian opens',
+			},
+			{
+				name: 'Admin Password',
+				description: 'Used exclusively for managing rooms on the host server',
+			},
+		];
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();

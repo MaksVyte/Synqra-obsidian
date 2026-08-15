@@ -1,4 +1,4 @@
-import { FileManager, Notice, requestUrl, TFolder, type TFile, type Vault } from 'obsidian';
+import { FileManager, Notice, requestUrl, TFolder, TFile, type Vault, type Workspace } from 'obsidian';
 import type * as Y from 'yjs';
 import type { DocHandle, SyncManager } from '../syncManager';
 import type { FileEntry } from '../types';
@@ -100,8 +100,7 @@ export class ManifestManager {
 	}
 
 	async purgeUnmatchedLocalFiles(
-		fileManager: { trashFile: (file: any) => Promise<void> },
-		workspace?: { iterateAllLeaves: (fn: (leaf: any) => void) => void },
+		workspace?: Workspace,
 		mute?: (path: string) => void,
 		unmute?: (path: string) => void,
 	): Promise<number> {
@@ -119,8 +118,9 @@ export class ManifestManager {
 				const canonical = toCanonicalPath(normalizePath(item.path));
 				if (!entries.has(canonical)) {
 					const prefix = item.path.endsWith('/') ? item.path : item.path + '/';
-					workspace.iterateAllLeaves((leaf: any) => {
-						const p = leaf.view?.file?.path;
+					workspace.iterateAllLeaves((leaf) => {
+						const view = leaf.view as { file?: { path: string } };
+						const p = view?.file?.path;
 						if (p && (p === item.path || p.startsWith(prefix))) {
 							leaf.detach();
 						}
@@ -130,8 +130,8 @@ export class ManifestManager {
 		}
 
 		// Separate files and folders to delete files first
-		const filesToPurge: any[] = [];
-		const foldersToPurge: any[] = [];
+		const filesToPurge: TFile[] = [];
+		const foldersToPurge: TFolder[] = [];
 
 		for (const item of allLocal) {
 			if (!item.path || item.path === '/') continue;
@@ -140,7 +140,7 @@ export class ManifestManager {
 			if (!entries.has(canonical)) {
 				if (item instanceof TFolder) {
 					foldersToPurge.push(item);
-				} else {
+				} else if (item instanceof TFile) {
 					filesToPurge.push(item);
 				}
 			}
@@ -153,7 +153,9 @@ export class ManifestManager {
 					await this.fileManager.trashFile(item);
 				}
 				purged++;
-			} catch {} finally {
+			} catch {
+				// Ignore file delete error if already removed
+			} finally {
 				if (unmute) window.setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
 			}
 		}
@@ -165,7 +167,9 @@ export class ManifestManager {
 					await this.fileManager.trashFile(item);
 				}
 				purged++;
-			} catch {} finally {
+			} catch {
+				// Ignore folder delete error if already removed
+			} finally {
 				if (unmute) window.setTimeout(() => unmute(item.path), VAULT_EVENT_SETTLE_MS * 2);
 			}
 		}

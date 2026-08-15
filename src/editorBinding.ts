@@ -37,7 +37,9 @@ export class EditorBinding {
 						const anchor = Y.createRelativePositionFromTypeIndex(docHandle.text, selection.anchor);
 						const head = Y.createRelativePositionFromTypeIndex(docHandle.text, selection.head);
 						this.currentAwareness.setLocalStateField('cursor', { anchor, head });
-					} catch {}
+					} catch {
+						// Ignore cursor sync error when view is detaching
+					}
 				}
 			}
 		};

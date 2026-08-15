@@ -5,6 +5,18 @@ import type * as awarenessProtocol from 'y-protocols/awareness';
 
 const remoteCursorsAnnotation = Annotation.define<number[]>();
 
+interface AwarenessUserState {
+	cursor?: {
+		anchor?: Y.RelativePosition;
+		head?: Y.RelativePosition;
+	} | null;
+	user?: {
+		name?: string;
+		color?: string;
+		colorLight?: string;
+	};
+}
+
 class RemoteSelectionMarker implements LayerMarker {
 	constructor(
 		readonly top: number,
@@ -59,29 +71,33 @@ class RemoteCursorMarker implements LayerMarker {
 		readonly clientId: number,
 	) {}
 
-	get width(): number | null {
-		return 0;
-	}
-
 	draw(): HTMLElement {
-		const elt = createDiv({ cls: 'cm-remote-cursor-container' });
-		elt.style.setProperty('top', `${this.top}px`);
-		elt.style.setProperty('left', `${this.left - 6}px`);
-		elt.style.setProperty('height', `${this.height}px`);
+		const container = createDiv({ cls: 'cm-remote-cursor-container' });
+		container.style.setProperty('top', `${this.top}px`);
+		container.style.setProperty('left', `${this.left}px`);
+		container.style.setProperty('height', `${this.height}px`);
 
-		const caret = elt.createDiv({ cls: 'cm-remote-cursor-caret' });
+		const caret = container.createDiv({ cls: 'cm-remote-cursor-caret' });
 		caret.style.setProperty('background-color', this.color);
+		caret.style.setProperty('box-shadow', `0 0 4px ${this.color}88`);
 
-		const badge = elt.createDiv({ cls: 'cm-remote-cursor-badge', text: this.name });
-		badge.style.setProperty('background-color', this.color);
+		const label = container.createDiv({
+			cls: 'cm-remote-cursor-label',
+			text: this.name,
+		});
+		label.style.setProperty('background-color', this.color);
 
-		return elt;
+		return container;
 	}
 
 	update(dom: HTMLElement, prev: LayerMarker): boolean {
-		if (prev instanceof RemoteCursorMarker && prev.color === this.color && prev.name === this.name) {
+		if (
+			prev instanceof RemoteCursorMarker &&
+			prev.color === this.color &&
+			prev.name === this.name
+		) {
 			dom.style.setProperty('top', `${this.top}px`);
-			dom.style.setProperty('left', `${this.left - 6}px`);
+			dom.style.setProperty('left', `${this.left}px`);
 			dom.style.setProperty('height', `${this.height}px`);
 			return true;
 		}
@@ -107,14 +123,14 @@ export function createRemoteCursorPlugin(
 ): Extension {
 	const awarenessTracker = ViewPlugin.fromClass(
 		class {
-			private readonly listener: (changes: { added: number[]; updated: number[]; removed: number[] }) => void;
+			view: EditorView;
+			listener: () => void;
 
-			constructor(readonly view: EditorView) {
-				this.listener = ({ added, updated, removed }) => {
-					const clients = added.concat(updated, removed);
-					if (clients.some((id) => id !== awareness.doc.clientID)) {
-						view.dispatch({ annotations: [remoteCursorsAnnotation.of(clients)] });
-					}
+			constructor(view: EditorView) {
+				this.view = view;
+				this.listener = () => {
+					// Trigger layer re-render when awareness updates
+					this.view.requestMeasure();
 				};
 				awareness.on('change', this.listener);
 			}
@@ -124,24 +140,25 @@ export function createRemoteCursorPlugin(
 			}
 
 			update(update: ViewUpdate): void {
-				const localState = awareness.getLocalState();
+				const localState = awareness.getLocalState() as AwarenessUserState | null;
 				if (localState != null) {
 					const hasFocus = update.view.hasFocus;
 					const sel = hasFocus ? update.state.selection.main : null;
-					const currentAnchor = localState.cursor == null ? null : Y.createRelativePositionFromJSON(localState.cursor.anchor);
-					const currentHead = localState.cursor == null ? null : Y.createRelativePositionFromJSON(localState.cursor.head);
+					const cursor = localState.cursor;
+					const currentAnchor = cursor?.anchor != null ? Y.createRelativePositionFromJSON(cursor.anchor) : null;
+					const currentHead = cursor?.head != null ? Y.createRelativePositionFromJSON(cursor.head) : null;
 
 					if (sel != null) {
 						const anchor = Y.createRelativePositionFromTypeIndex(ytext, sel.anchor);
 						const head = Y.createRelativePositionFromTypeIndex(ytext, sel.head);
 						if (
-							localState.cursor == null ||
+							cursor == null ||
 							!Y.compareRelativePositions(currentAnchor, anchor) ||
 							!Y.compareRelativePositions(currentHead, head)
 						) {
 							awareness.setLocalStateField('cursor', { anchor, head });
 						}
-					} else if (localState.cursor != null && !hasFocus) {
+					} else if (cursor != null && !hasFocus) {
 						awareness.setLocalStateField('cursor', null);
 					}
 				}
@@ -153,7 +170,7 @@ export function createRemoteCursorPlugin(
 		pointerdown(_e, view) {
 			window.setTimeout(() => {
 				if (view.dom && view.dom.isConnected && view.hasFocus) {
-					const localState = awareness.getLocalState();
+					const localState = awareness.getLocalState() as AwarenessUserState | null;
 					if (localState) {
 						const sel = view.state.selection.main;
 						const anchor = Y.createRelativePositionFromTypeIndex(ytext, sel.anchor);
@@ -178,9 +195,10 @@ export function createRemoteCursorPlugin(
 			const markers: LayerMarker[] = [];
 			const docLength = view.state.doc.length;
 
-			awareness.getStates().forEach((state, clientId) => {
+			awareness.getStates().forEach((rawState, clientId) => {
 				if (clientId === awareness.doc.clientID) return;
-				const cursor = state.cursor;
+				const state = rawState as AwarenessUserState;
+				const cursor = state?.cursor;
 				if (!cursor || !cursor.anchor || !cursor.head) return;
 
 				const anchorPos = Y.createAbsolutePositionFromRelativePosition(cursor.anchor, ydoc);
@@ -195,8 +213,8 @@ export function createRemoteCursorPlugin(
 				const end = Math.max(from, to);
 				const range = EditorSelection.range(start, end);
 
-				const { color = '#30bced' } = (state.user as { color?: string } | undefined) || {};
-				const colorLight = (state.user as { colorLight?: string } | undefined)?.colorLight || color + '33';
+				const { color = '#30bced' } = state.user || {};
+				const colorLight = state.user?.colorLight || color + '33';
 
 				const rectMarkers = RectangleMarker.forRange(view, 'cm-remote-selection-box', range);
 				for (const rm of rectMarkers) {
@@ -229,9 +247,10 @@ export function createRemoteCursorPlugin(
 			const markers: LayerMarker[] = [];
 			const docLength = view.state.doc.length;
 
-			awareness.getStates().forEach((state, clientId) => {
+			awareness.getStates().forEach((rawState, clientId) => {
 				if (clientId === awareness.doc.clientID) return;
-				const cursor = state.cursor;
+				const state = rawState as AwarenessUserState;
+				const cursor = state?.cursor;
 				if (!cursor || !cursor.head) return;
 
 				const headPos = Y.createAbsolutePositionFromRelativePosition(cursor.head, ydoc);
@@ -247,7 +266,7 @@ export function createRemoteCursorPlugin(
 				const top = coords.top - docRect.top + view.scrollDOM.scrollTop;
 				const height = coords.bottom - coords.top || 18;
 
-				const { color = '#30bced', name = 'Anonymous' } = (state.user as { color?: string; name?: string } | undefined) || {};
+				const { color = '#30bced', name = 'Anonymous' } = state.user || {};
 
 				markers.push(new RemoteCursorMarker(top, left, height, color, name, clientId));
 			});

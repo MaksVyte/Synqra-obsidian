@@ -24,7 +24,7 @@ export interface ExcalidrawApi {
 	onPointerUpdate?: (cb: (payload: { pointer: { x: number; y: number }; button: 'down' | 'up'; pointersMap?: Map<number, unknown> }) => void) => () => void;
 }
 
-function getElementFingerprint(el: Record<string, unknown>): string {
+function getElementFingerprint(el: ExcalidrawElementStub | Record<string, unknown>): string {
 	const points = Array.isArray(el.points) ? el.points : [];
 	const pointsLen = points.length;
 	const id = String(el.id ?? '');
@@ -120,7 +120,7 @@ export class ExcalidrawBinding {
 
 		if (this.activationGen !== gen) return false;
 
-		const activeAPI: ExcalidrawApi = excalidrawAPI as ExcalidrawApi;
+		const activeAPI = excalidrawAPI as unknown as ExcalidrawApi;
 		const yElements = docHandle.doc.getMap<string>('excalidraw_elements');
 		this.currentAwareness = docHandle.awareness;
 
@@ -139,15 +139,15 @@ export class ExcalidrawBinding {
 		}
 
 		// Initial sync between Yjs elements map and local Excalidraw scene
-		const initialSceneElements = (activeAPI.getSceneElementsIncludingDeleted?.() ||
-			activeAPI.getSceneElements?.() ||
-			[]) as ExcalidrawElementStub[];
+		const initialSceneElements = activeAPI.getSceneElementsIncludingDeleted?.() ??
+			activeAPI.getSceneElements?.() ??
+			[];
 		if (yElements.size === 0 && initialSceneElements.length > 0) {
 			docHandle.doc.transact(() => {
 				for (const el of initialSceneElements) {
 					yElements.set(el.id, JSON.stringify(el));
 					if (!el.isDeleted) {
-						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el as unknown as Record<string, unknown>));
+						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el));
 					}
 				}
 			}, 'local');
@@ -156,7 +156,9 @@ export class ExcalidrawBinding {
 			for (const raw of yElements.values()) {
 				try {
 					remoteElements.push(JSON.parse(raw) as ExcalidrawElementStub);
-				} catch {}
+				} catch {
+					// Ignore invalid JSON from corrupted chunk
+				}
 			}
 			const merged = reconcileExcalidrawElements(initialSceneElements, remoteElements);
 			this.isApplyingRemote = true;
@@ -166,7 +168,7 @@ export class ExcalidrawBinding {
 					if (el.isDeleted) {
 						this.lastBroadcastFingerprints.delete(el.id);
 					} else {
-						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el as unknown as Record<string, unknown>));
+						this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el));
 					}
 				}
 			} finally {
@@ -184,14 +186,16 @@ export class ExcalidrawBinding {
 				appState.draggingElement?.id ||
 				appState.resizingElement?.id;
 
-			const currentLocal = (activeAPI.getSceneElementsIncludingDeleted?.() ||
-				activeAPI.getSceneElements?.() ||
-				[]) as ExcalidrawElementStub[];
+			const currentLocal = activeAPI.getSceneElementsIncludingDeleted?.() ??
+				activeAPI.getSceneElements?.() ??
+				[];
 			const currentRemote: ExcalidrawElementStub[] = [];
 			for (const raw of yElements.values()) {
 				try {
 					currentRemote.push(JSON.parse(raw) as ExcalidrawElementStub);
-				} catch {}
+				} catch {
+					// Ignore invalid JSON
+				}
 			}
 
 			const reconciled = reconcileExcalidrawElements(currentLocal, currentRemote, activeId);
@@ -203,7 +207,7 @@ export class ExcalidrawBinding {
 						if (el.isDeleted) {
 							this.lastBroadcastFingerprints.delete(el.id);
 						} else {
-							this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el as unknown as Record<string, unknown>));
+							this.lastBroadcastFingerprints.set(el.id, getElementFingerprint(el));
 						}
 					}
 				}
@@ -293,7 +297,9 @@ export class ExcalidrawBinding {
 
 			try {
 				activeAPI.updateScene({ collaborators });
-			} catch {}
+			} catch {
+				// Ignore scene update error
+			}
 		};
 		docHandle.awareness.on('change', this.awarenessObserver);
 
@@ -311,9 +317,9 @@ export class ExcalidrawBinding {
 		ydoc: Y.Doc,
 	): void {
 		if (this.isApplyingRemote || !excalidrawAPI) return;
-		const elements = (excalidrawAPI.getSceneElementsIncludingDeleted?.() ||
-			excalidrawAPI.getSceneElements?.() ||
-			[]) as ExcalidrawElementStub[];
+		const elements = excalidrawAPI.getSceneElementsIncludingDeleted?.() ??
+			excalidrawAPI.getSceneElements?.() ??
+			[];
 		if (elements.length === 0 && this.lastBroadcastFingerprints.size === 0) return;
 
 		const currentIds = new Set<string>();
@@ -329,7 +335,7 @@ export class ExcalidrawBinding {
 				}
 				continue;
 			}
-			const fp = getElementFingerprint(el as unknown as Record<string, unknown>);
+			const fp = getElementFingerprint(el);
 			const lastFp = this.lastBroadcastFingerprints.get(el.id);
 			if (lastFp !== fp) {
 				changed.push(el);

@@ -68,7 +68,7 @@ export function registerVaultEvents(plugin: CollabPlugin): void {
 				// Detach any open leaves for this file or sub-files if folder to prevent resurrection
 				const prefix = file.path.endsWith('/') ? file.path : file.path + '/';
 				plugin.app.workspace.iterateAllLeaves((leaf) => {
-					const view = leaf.view as any;
+					const view = leaf.view as { file?: { path: string } };
 					const p = view?.file?.path;
 					if (p && (p === file.path || p.startsWith(prefix))) {
 						leaf.detach();
@@ -110,7 +110,9 @@ export function registerVaultEvents(plugin: CollabPlugin): void {
 								await plugin.backgroundSync.onFileAdded(file.path);
 							}
 							await plugin.manifestManager.updateFile(file, content);
-						} catch {}
+						} catch {
+							// Ignore read/update error on moved file
+						}
 					})();
 				}
 				return;

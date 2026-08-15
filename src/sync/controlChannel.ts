@@ -91,9 +91,9 @@ export class ControlChannel {
 		ws.onmessage = (event) => {
 			if (this.ws !== ws) return;
 			try {
-				const data = typeof event.data === 'string' ? JSON.parse(event.data) : null;
-				if (data && typeof data === 'object' && 'type' in data) {
-					const msg = data as ControlMessage;
+				const raw: unknown = typeof event.data === 'string' ? JSON.parse(event.data) : null;
+				if (raw && typeof raw === 'object' && 'type' in raw) {
+					const msg = raw as ControlMessage;
 					if (msg.type === 'ping') {
 						this.send({ type: 'pong' });
 						return;

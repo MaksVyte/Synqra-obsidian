@@ -71,9 +71,9 @@ export default class CollabPlugin extends Plugin {
 			this.controlChannel.send({ type: 'file-op', op });
 		});
 
-		this.controlChannel.onMessage(async (msg) => {
+		this.controlChannel.onMessage((msg) => {
 			if (msg.type === 'file-op') {
-				await this.fileOpsManager.applyRemoteOp(msg.op);
+				void this.fileOpsManager.applyRemoteOp(msg.op);
 			}
 		});
 
@@ -218,10 +218,9 @@ export default class CollabPlugin extends Plugin {
 		try {
 			await this.manifestManager.connect(this.syncManager);
 			await this.manifestManager.purgeUnmatchedLocalFiles(
-				this.app.fileManager,
 				this.app.workspace,
-				(path) => this.fileOpsManager.mutePathEvents(path),
-				(path) => this.fileOpsManager.unmutePathEvents(path),
+				(path: string) => this.fileOpsManager.mutePathEvents(path),
+				(path: string) => this.fileOpsManager.unmutePathEvents(path),
 			);
 			await this.manifestManager.syncFromManifest(
 				this.settings.serverUrl,
@@ -233,33 +232,37 @@ export default class CollabPlugin extends Plugin {
 			await this.backgroundSync.startAll();
 			this.onActiveFileChange();
 
-			this.manifestManager.setManifestChangeHandler(async (added, removed, _updated) => {
-				for (const path of removed) {
-					const localPath = toLocalPath(path);
-					const prefix = localPath.endsWith('/') ? localPath : localPath + '/';
-					this.app.workspace.iterateAllLeaves((leaf) => {
-						const view = leaf.view as { file?: { path: string } };
-						const p = view?.file?.path;
-						if (p && (p === localPath || p.startsWith(prefix))) {
-							leaf.detach();
-						}
-					});
-					this.backgroundSync.onFileRemoved(path);
-					const file = this.app.vault.getAbstractFileByPath(localPath);
-					if (file) {
-						this.fileOpsManager.mutePathEvents(localPath);
-						try {
-							await this.app.fileManager.trashFile(file);
-						} catch {} finally {
-							window.setTimeout(() => this.fileOpsManager.unmutePathEvents(localPath), VAULT_EVENT_SETTLE_MS);
+			this.manifestManager.setManifestChangeHandler((added, removed, _updated) => {
+				void (async () => {
+					for (const path of removed) {
+						const localPath = toLocalPath(path);
+						const prefix = localPath.endsWith('/') ? localPath : localPath + '/';
+						this.app.workspace.iterateAllLeaves((leaf) => {
+							const view = leaf.view as { file?: { path: string } };
+							const p = view?.file?.path;
+							if (p && (p === localPath || p.startsWith(prefix))) {
+								leaf.detach();
+							}
+						});
+						this.backgroundSync.onFileRemoved(path);
+						const file = this.app.vault.getAbstractFileByPath(localPath);
+						if (file) {
+							this.fileOpsManager.mutePathEvents(localPath);
+							try {
+								await this.app.fileManager.trashFile(file);
+							} catch {
+								// Ignore if already deleted
+							} finally {
+								window.setTimeout(() => this.fileOpsManager.unmutePathEvents(localPath), VAULT_EVENT_SETTLE_MS);
+							}
 						}
 					}
-				}
-				for (const path of added) {
-					if (isTextFile(path)) {
-						await this.backgroundSync.onFileAdded(path);
+					for (const path of added) {
+						if (isTextFile(path)) {
+							await this.backgroundSync.onFileAdded(path);
+						}
 					}
-				}
+				})();
 			});
 		} catch (err) {
 			console.error('[Synqra] error during connect init:', err);

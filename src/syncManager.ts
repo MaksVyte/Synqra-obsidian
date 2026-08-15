@@ -294,7 +294,9 @@ export class SyncManager {
 							return;
 						}
 					}
-				} catch {}
+				} catch {
+					// Ignore probe network failure and fallback to reconnect timer
+				}
 			}
 
 			if (this.shouldConnect) {
