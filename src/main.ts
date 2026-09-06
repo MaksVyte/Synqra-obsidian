@@ -1,4 +1,4 @@
-import { Notice, Plugin } from 'obsidian';
+import { Notice, Plugin, normalizePath } from 'obsidian';
 import { CollabSettingTab } from './settings';
 import { DEFAULT_SETTINGS, getRandomPresetColor, getRandomUsername, type CollabSettings, type ConnectionStatus } from './types';
 import { SyncManager } from './syncManager';
@@ -11,7 +11,7 @@ import { EditorBinding } from './editorBinding';
 import { ExcalidrawBinding } from './editor/excalidrawBinding';
 import { PresenceManager } from './session/presenceManager';
 import { registerVaultEvents } from './files/vaultEvents';
-import { isTextFile, toLocalPath, VAULT_EVENT_SETTLE_MS } from './utils';
+import { isTextFile, toLocalPath } from './utils';
 
 export default class CollabPlugin extends Plugin {
 	settings!: CollabSettings;
@@ -40,7 +40,7 @@ export default class CollabPlugin extends Plugin {
 
 		this.controlChannel = new ControlChannel(() => this.settings);
 
-		this.exclusionManager = new ExclusionManager(this.app.vault);
+		this.exclusionManager = new ExclusionManager(this.app.vault, () => this.settings.sharedFolder);
 		this.fileOpsManager = new FileOpsManager(this.app, this.app.vault, this.app.fileManager);
 		this.manifestManager = new ManifestManager(this.app.vault, this.exclusionManager, this.app.fileManager);
 		this.backgroundSync = new BackgroundSync(
@@ -49,6 +49,8 @@ export default class CollabPlugin extends Plugin {
 			this.manifestManager,
 			this.fileOpsManager,
 		);
+		this.fileOpsManager.setSyncDependencies(this.manifestManager, this.backgroundSync);
+		this.manifestManager.setFileOpsManager(this.fileOpsManager);
 		this.editorBinding = new EditorBinding(
 			this.app,
 			this.syncManager,
@@ -59,6 +61,8 @@ export default class CollabPlugin extends Plugin {
 			this.syncManager,
 			(path) => this.manifestManager.hasFile(path),
 		);
+		this.excalidrawBinding.setManifestManager(this.manifestManager);
+		this.fileOpsManager.setEditorBindings(this.editorBinding, this.excalidrawBinding);
 		this.presenceManager = new PresenceManager(
 			this.app,
 			this.controlChannel,
@@ -70,10 +74,28 @@ export default class CollabPlugin extends Plugin {
 		this.fileOpsManager.setSender((op) => {
 			this.controlChannel.send({ type: 'file-op', op });
 		});
+		this.fileOpsManager.setActiveFileRenameHandler((oldPath, newPath) => {
+			const active = this.app.workspace.getActiveFile();
+			if (!active) return;
+			const oldNorm = normalizePath(oldPath);
+			const newNorm = normalizePath(newPath);
+			const activeNorm = normalizePath(active.path);
+			if (
+				activeNorm === oldNorm ||
+				activeNorm === newNorm ||
+				activeNorm.startsWith(oldNorm + '/') ||
+				activeNorm.startsWith(newNorm + '/')
+			) {
+				this.onActiveFileChange();
+			}
+		});
 
 		this.controlChannel.onMessage(async (msg) => {
 			if (msg.type === 'file-op') {
 				await this.fileOpsManager.applyRemoteOp(msg.op);
+			} else if (msg.type === 'room-deleted') {
+				new Notice(`[Synqra] ${msg.message || 'Room was deleted by an admin'}`);
+				this.disconnect();
 			}
 		});
 
@@ -129,6 +151,16 @@ export default class CollabPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile && isTextFile(activeFile.path)) {
+			const docHandle = this.syncManager.getDoc(activeFile.path);
+			if (docHandle) {
+				const content = docHandle.text.toString();
+				if (content) {
+					void this.app.vault.adapter.write(toLocalPath(activeFile.path), content);
+				}
+			}
+		}
 		this.excalidrawBinding.destroy();
 		this.editorBinding.destroy();
 		this.backgroundSync.destroy();
@@ -145,6 +177,11 @@ export default class CollabPlugin extends Plugin {
 	}
 
 	disconnect(): void {
+		this.editorBinding.unbind();
+		this.excalidrawBinding.unbind();
+		this.backgroundSync.destroy();
+		this.manifestManager.destroy();
+		this.presenceManager.reset();
 		this.syncManager.disconnect();
 		this.controlChannel.disconnect();
 	}
@@ -217,53 +254,29 @@ export default class CollabPlugin extends Plugin {
 	private async onConnected(): Promise<void> {
 		try {
 			await this.manifestManager.connect(this.syncManager);
-			await this.manifestManager.purgeUnmatchedLocalFiles(
-				this.app.workspace,
-				(path: string) => this.fileOpsManager.mutePathEvents(path),
-				(path: string) => this.fileOpsManager.unmutePathEvents(path),
-			);
-			await this.manifestManager.syncFromManifest(
-				this.settings.serverUrl,
-				this.settings.roomId,
-				(path) => this.fileOpsManager.mutePathEvents(path),
-				(path) => this.fileOpsManager.unmutePathEvents(path),
-				this.settings.serverPassword,
-			);
+			this.onActiveFileChange();
+			if (this.manifestManager.size() === 0) {
+				// Room has no manifest on server yet; publish local shared files to initialize room safely
+				await this.manifestManager.publishManifest();
+			} else {
+				const purgedCount = await this.manifestManager.purgeUnmatchedLocalFiles(
+					this.app.workspace,
+					(path: string) => this.fileOpsManager.mutePathEvents(path),
+					(path: string) => this.fileOpsManager.unmutePathEvents(path),
+				);
+				if (purgedCount > 0) {
+					new Notice(`[Synqra] Moved ${purgedCount} unmatched local file(s) to trash.`, 6000);
+				}
+				await this.manifestManager.syncFromManifest(
+					this.settings.serverUrl,
+					this.settings.roomId,
+					(path) => this.fileOpsManager.mutePathEvents(path),
+					(path) => this.fileOpsManager.unmutePathEvents(path),
+					this.settings.serverPassword,
+				);
+			}
 			await this.backgroundSync.startAll();
 			this.onActiveFileChange();
-
-			this.manifestManager.setManifestChangeHandler((added, removed, _updated) => {
-				void (async () => {
-					for (const path of removed) {
-						const localPath = toLocalPath(path);
-						const prefix = localPath.endsWith('/') ? localPath : localPath + '/';
-						this.app.workspace.iterateAllLeaves((leaf) => {
-							const view = leaf.view as { file?: { path: string } };
-							const p = view?.file?.path;
-							if (p && (p === localPath || p.startsWith(prefix))) {
-								leaf.detach();
-							}
-						});
-						this.backgroundSync.onFileRemoved(path);
-						const file = this.app.vault.getAbstractFileByPath(localPath);
-						if (file) {
-							this.fileOpsManager.mutePathEvents(localPath);
-							try {
-								await this.app.fileManager.trashFile(file);
-							} catch {
-								// Ignore if already deleted
-							} finally {
-								window.setTimeout(() => this.fileOpsManager.unmutePathEvents(localPath), VAULT_EVENT_SETTLE_MS);
-							}
-						}
-					}
-					for (const path of added) {
-						if (isTextFile(path)) {
-							await this.backgroundSync.onFileAdded(path);
-						}
-					}
-				})();
-			});
 		} catch (err) {
 			console.error('[Synqra] error during connect init:', err);
 		}

@@ -32,7 +32,7 @@ export function toCanonicalPath(localPath: string): string {
 }
 
 export function normalizePath(filePath: string): string {
-	return filePath.replace(/\\/g, '/');
+	return filePath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '').replace(/\/+/g, '/');
 }
 
 export function normalizeLineEndings(content: string): string {

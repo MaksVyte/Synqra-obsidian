@@ -4,7 +4,8 @@ import type { SyncManager } from '../syncManager';
 
 export class PresenceManager {
 	private debounceTimer: number | null = null;
-	private peersMap = new Map<string, { displayName: string; activeFile: string | null }>();
+	private pruneInterval: number | null = null;
+	private peersMap = new Map<string, { displayName: string; activeFile: string | null; lastSeen: number }>();
 
 	constructor(
 		private readonly app: App,
@@ -17,9 +18,19 @@ export class PresenceManager {
 				this.peersMap.set(msg.displayName, {
 					displayName: msg.displayName,
 					activeFile: msg.activeFile,
+					lastSeen: Date.now(),
 				});
 			}
 		});
+
+		this.pruneInterval = window.setInterval(() => {
+			const now = Date.now();
+			for (const [name, peer] of this.peersMap.entries()) {
+				if (now - peer.lastSeen > 60_000) {
+					this.peersMap.delete(name);
+				}
+			}
+		}, 30_000);
 	}
 
 	debouncedBroadcastPresence(): void {
@@ -39,11 +50,22 @@ export class PresenceManager {
 		});
 	}
 
+	reset(): void {
+		if (this.debounceTimer !== null) {
+			window.clearTimeout(this.debounceTimer);
+			this.debounceTimer = null;
+		}
+		this.peersMap.clear();
+	}
 
 	destroy(): void {
 		if (this.debounceTimer !== null) {
 			window.clearTimeout(this.debounceTimer);
 			this.debounceTimer = null;
+		}
+		if (this.pruneInterval !== null) {
+			window.clearInterval(this.pruneInterval);
+			this.pruneInterval = null;
 		}
 		this.peersMap.clear();
 	}

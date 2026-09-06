@@ -1,6 +1,6 @@
-import { MarkdownView, Notice, type TAbstractFile, TFile } from 'obsidian';
+import { Notice, type TAbstractFile, TFile } from 'obsidian';
 import type CollabPlugin from '../main';
-import { isTextFile } from '../utils';
+import { VAULT_EVENT_SETTLE_MS, isTextFile } from '../utils';
 
 export function registerVaultEvents(plugin: CollabPlugin): void {
 	let pendingRename: Promise<void> | null = null;
@@ -28,6 +28,7 @@ export function registerVaultEvents(plugin: CollabPlugin): void {
 			const originalPath = file.path;
 			if (!plugin.manifestManager.isSharedPath(originalPath)) return;
 			if (renamedPaths.has(originalPath)) return;
+			if (plugin.fileOpsManager.isPathMuted(originalPath)) return;
 
 			void plugin.fileOpsManager.onFileCreate(file);
 
@@ -64,25 +65,64 @@ export function registerVaultEvents(plugin: CollabPlugin): void {
 			if (!plugin.manifestManager.isSharedPath(file.path)) return;
 			if (plugin.fileOpsManager.isPathMuted(file.path)) return;
 
-			const run = () => {
+			// Send delete op to server and peers immediately before muting
+			plugin.fileOpsManager.onFileDelete(file.path, true);
+			plugin.backgroundSync.onFileRemoved(file.path);
+			plugin.manifestManager.removeFile(file.path);
+
+			// Mute path events locally to prevent view tear-down from resurrecting file
+			plugin.fileOpsManager.mutePathEvents(file.path);
+
+			const run = async () => {
+				if (plugin.editorBinding.getCurrentPath() === file.path) {
+					plugin.editorBinding.unbind();
+				}
+				if (plugin.excalidrawBinding.getCurrentPath() === file.path) {
+					plugin.excalidrawBinding.unbind(true);
+				}
+
+				const active = plugin.app.workspace.getActiveFile();
+				if (active && active.path === file.path) {
+					plugin.backgroundSync.setActiveFile(null);
+					plugin.backgroundSync.setCollabBoundFile(null);
+				}
+
 				// Detach any open leaves for this file or sub-files if folder to prevent resurrection
 				const prefix = file.path.endsWith('/') ? file.path : file.path + '/';
 				plugin.app.workspace.iterateAllLeaves((leaf) => {
 					const view = leaf.view as { file?: { path: string } };
 					const p = view?.file?.path;
 					if (p && (p === file.path || p.startsWith(prefix))) {
+						void leaf.setViewState({ type: 'empty' });
 						leaf.detach();
 					}
 				});
 
-				plugin.backgroundSync.onFileRemoved(file.path);
-				plugin.manifestManager.removeFile(file.path);
-				plugin.fileOpsManager.onFileDelete(file.path);
+				// Verify file is not resurrected on disk by editor flush
+				const lingering = plugin.app.vault.getAbstractFileByPath(file.path);
+				if (lingering) {
+					try {
+						await plugin.app.fileManager.trashFile(lingering);
+					} catch {
+						try {
+							await plugin.app.vault.adapter.remove(file.path);
+						} catch {
+							// Ignore
+						}
+					}
+				}
 			};
-			if (pendingRename) {
-				void pendingRename.then(run);
-			} else {
-				run();
+
+			try {
+				if (pendingRename) {
+					void pendingRename.then(run);
+				} else {
+					void run();
+				}
+			} finally {
+				window.setTimeout(() => {
+					plugin.fileOpsManager.unmutePathEvents(file.path);
+				}, VAULT_EVENT_SETTLE_MS);
 			}
 		}),
 	);
@@ -129,14 +169,20 @@ export function registerVaultEvents(plugin: CollabPlugin): void {
 			// Both are shared paths: normal rename
 			renamedPaths.add(oldPath);
 
-			const prev = pendingRename ?? Promise.resolve();
+			const prev = (pendingRename ?? Promise.resolve()).catch(() => {});
 			const task = prev.then(async () => {
 				plugin.fileOpsManager.onFileRename(oldPath, file.path);
 				await plugin.backgroundSync.onFileRenamed(oldPath, file.path);
 				plugin.manifestManager.renameFile(oldPath, file.path, plugin.syncManager);
 
-				const activeFile = plugin.app.workspace.getActiveViewOfType(MarkdownView)?.file;
-				if (activeFile && (activeFile.path === file.path || activeFile.path === oldPath)) {
+				const activeFile = plugin.app.workspace.getActiveFile();
+				if (
+					activeFile &&
+					(activeFile.path === file.path ||
+						activeFile.path === oldPath ||
+						activeFile.path.startsWith(oldPath + '/') ||
+						activeFile.path.startsWith(file.path + '/'))
+				) {
 					plugin.onActiveFileChange();
 				}
 			});

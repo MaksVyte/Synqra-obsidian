@@ -128,7 +128,13 @@ export function createRemoteCursorPlugin(
 				this.listener = ({ added, updated, removed }) => {
 					const clients = added.concat(updated, removed);
 					if (clients.some((id) => id !== awareness.doc.clientID)) {
-						view.dispatch({ annotations: [remoteCursorsAnnotation.of(clients)] });
+						if (view.dom && view.dom.isConnected) {
+							try {
+								view.dispatch({ annotations: [remoteCursorsAnnotation.of(clients)] });
+							} catch {
+								// View may be updating or unmounting
+							}
+						}
 					}
 				};
 				awareness.on('change', this.listener);

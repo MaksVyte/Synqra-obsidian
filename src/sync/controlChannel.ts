@@ -10,6 +10,8 @@ export class ControlChannel {
 	private reconnectAttempts = 0;
 	private isDestroyed = false;
 
+	private sendQueue: ControlMessage[] = [];
+
 	onStatusChange: (status: 'connected' | 'connecting' | 'disconnected') => void = () => {};
 
 	constructor(private readonly getSettings: () => CollabSettings) {}
@@ -23,6 +25,7 @@ export class ControlChannel {
 	disconnect(): void {
 		this.shouldConnect = false;
 		this.stopPing();
+		this.sendQueue = [];
 		if (this.reconnectTimer !== null) {
 			window.clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = null;
@@ -50,8 +53,19 @@ export class ControlChannel {
 				this.ws.send(JSON.stringify(msg));
 			} catch (err) {
 				console.error('[Synqra] failed to send control msg:', err);
+				this.queueSend(msg);
 			}
+		} else {
+			this.queueSend(msg);
 		}
+	}
+
+	private queueSend(msg: ControlMessage): void {
+		if (msg.type === 'ping' || msg.type === 'pong') return;
+		if (this.sendQueue.length >= 500) {
+			this.sendQueue.shift();
+		}
+		this.sendQueue.push(msg);
 	}
 
 	onMessage(handler: (msg: ControlMessage) => void): void {
@@ -86,6 +100,18 @@ export class ControlChannel {
 			this.reconnectAttempts = 0;
 			this.onStatusChange('connected');
 			this.startPing();
+			while (this.sendQueue.length > 0 && this.ws?.readyState === WebSocket.OPEN) {
+				const next = this.sendQueue.shift();
+				if (next) {
+					try {
+						this.ws.send(JSON.stringify(next));
+					} catch (err) {
+						console.error('[Synqra] failed to flush queued control msg:', err);
+						this.sendQueue.unshift(next);
+						break;
+					}
+				}
+			}
 		};
 
 		ws.onmessage = (event) => {

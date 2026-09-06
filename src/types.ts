@@ -142,11 +142,17 @@ export interface PongMessage {
 	type: 'pong';
 }
 
+export interface RoomDeletedMessage {
+	type: 'room-deleted';
+	message: string;
+}
+
 export type ControlMessage =
 	| FileOpMessage
 	| PresenceUpdateMessage
 	| PingMessage
-	| PongMessage;
+	| PongMessage
+	| RoomDeletedMessage;
 
 export interface FileEntry {
 	hash: string;

@@ -68,6 +68,10 @@ export class EditorBinding {
 		this.currentPath = null;
 	}
 
+	getCurrentPath(): string | null {
+		return this.currentPath;
+	}
+
 	async activateForFile(
 		file: TFile | null,
 		cursorUser?: CursorUser,
@@ -167,9 +171,11 @@ export class EditorBinding {
 				view.dispatch({
 					effects: this.compartment.reconfigure(extensions),
 				});
-			} else {
+			} else if (localContent.length === 0 && remoteContent.length > 0) {
 				view.dispatch({
 					changes: { from: 0, to: view.state.doc.length, insert: remoteContent },
+				});
+				view.dispatch({
 					effects: this.compartment.reconfigure(extensions),
 				});
 				if (file && this.hasFile(filePath) && this.app.vault.getAbstractFileByPath(file.path)) {
@@ -179,6 +185,17 @@ export class EditorBinding {
 						// Ignore concurrent write
 					}
 				}
+			} else {
+				// Both have content but differ (e.g. offline edits made locally)
+				// Apply minimal diff to Yjs CRDT so offline local edits are merged rather than erased
+				applyMinimalYTextUpdate(docHandle.doc, docHandle.text, localContent);
+				const mergedContent = docHandle.text.toString();
+				view.dispatch({
+					changes: { from: 0, to: view.state.doc.length, insert: mergedContent },
+				});
+				view.dispatch({
+					effects: this.compartment.reconfigure(extensions),
+				});
 			}
 		} else {
 			view.dispatch({

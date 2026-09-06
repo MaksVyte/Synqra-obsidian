@@ -14,8 +14,9 @@ import {
 	toLocalPath,
 } from '../utils';
 import type { ExclusionManager } from './exclusionManager';
+import type { FileOpsManager } from './fileOpsManager';
 
-async function hashBuffer(buf: ArrayBuffer): Promise<string> {
+async function hashBuffer(buf: BufferSource): Promise<string> {
 	const hash = await crypto.subtle.digest('SHA-256', buf);
 	return Array.from(new Uint8Array(hash))
 		.map((b) => b.toString(16).padStart(2, '0'))
@@ -23,11 +24,12 @@ async function hashBuffer(buf: ArrayBuffer): Promise<string> {
 }
 
 function hashContent(content: string): Promise<string> {
-	return hashBuffer(new TextEncoder().encode(content).buffer);
+	return hashBuffer(new TextEncoder().encode(content));
 }
 
 export class ManifestManager {
 	private syncManager: SyncManager | null = null;
+	private fileOpsManager: FileOpsManager | null = null;
 	private docHandle: DocHandle | null = null;
 	private manifest: Y.Map<FileEntry> | null = null;
 	private observer: ((events: Y.YMapEvent<FileEntry>) => void) | null = null;
@@ -37,6 +39,10 @@ export class ManifestManager {
 		private readonly exclusionManager: ExclusionManager,
 		private readonly fileManager?: FileManager,
 	) {}
+
+	setFileOpsManager(fileOpsManager: FileOpsManager): void {
+		this.fileOpsManager = fileOpsManager;
+	}
 
 	async connect(syncManager: SyncManager): Promise<void> {
 		this.syncManager = syncManager;
@@ -96,7 +102,19 @@ export class ManifestManager {
 				if (existing && existing.hash === fileEntry.hash) continue;
 				this.manifest?.set(filePath, fileEntry);
 			}
+
+			if (this.manifest) {
+				for (const key of Array.from(this.manifest.keys())) {
+					if (!entries.has(key) && this.isSharedPath(key)) {
+						this.manifest.delete(key);
+					}
+				}
+			}
 		});
+	}
+
+	size(): number {
+		return this.manifest?.size ?? 0;
 	}
 
 	async purgeUnmatchedLocalFiles(
@@ -104,8 +122,13 @@ export class ManifestManager {
 		mute?: (path: string) => void,
 		unmute?: (path: string) => void,
 	): Promise<number> {
-		if (!this.manifest) return 0;
+		if (!this.manifest || this.manifest.size === 0) return 0;
 		const entries = new Set(this.manifest.keys());
+		const entriesList = Array.from(entries);
+		const folderHasManifestFiles = (canonicalFolder: string) => {
+			const folderPrefix = canonicalFolder.endsWith('/') ? canonicalFolder : canonicalFolder + '/';
+			return entriesList.some((e) => e.startsWith(folderPrefix));
+		};
 		let purged = 0;
 
 		const allLocal = this.vault.getAllLoadedFiles();
@@ -117,6 +140,9 @@ export class ManifestManager {
 				if (!this.isSharedPath(item.path)) continue;
 				const canonical = toCanonicalPath(normalizePath(item.path));
 				if (!entries.has(canonical)) {
+					if (item instanceof TFolder && folderHasManifestFiles(canonical)) {
+						continue;
+					}
 					const prefix = item.path.endsWith('/') ? item.path : item.path + '/';
 					workspace.iterateAllLeaves((leaf) => {
 						const view = leaf.view as { file?: { path: string } };
@@ -139,7 +165,9 @@ export class ManifestManager {
 			const canonical = toCanonicalPath(normalizePath(item.path));
 			if (!entries.has(canonical)) {
 				if (item instanceof TFolder) {
-					foldersToPurge.push(item);
+					if (!folderHasManifestFiles(canonical)) {
+						foldersToPurge.push(item);
+					}
 				} else if (item instanceof TFile) {
 					filesToPurge.push(item);
 				}
@@ -175,6 +203,59 @@ export class ManifestManager {
 		}
 
 		return purged;
+	}
+
+	async downloadBinaryFile(
+		path: string,
+		serverUrl: string,
+		roomId: string,
+		serverPassword?: string,
+		mute?: (path: string) => void,
+		unmute?: (path: string) => void,
+	): Promise<boolean> {
+		if (!this.manifest) return false;
+		const entry = this.manifest.get(path);
+		if (!entry || !entry.binary) return false;
+
+		const diskPath = toLocalPath(path);
+		const localFile = getFileByPath(this.vault, diskPath);
+		if (localFile) {
+			try {
+				const localHash = await hashBuffer(await this.vault.readBinary(localFile));
+				if (localHash === entry.hash) return true;
+			} catch {
+				// Ignore read error and re-download
+			}
+		}
+
+		try {
+			const httpUrl = toHttpUrl(serverUrl);
+			const sep = httpUrl.endsWith('/') ? '' : '/';
+			const passParam = serverPassword ? `?password=${encodeURIComponent(serverPassword)}` : '';
+			const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+			const fileUrl = `${httpUrl}${sep}file/${encodeURIComponent(roomId)}/${encodedPath}${passParam}`;
+			const res = await requestUrl({ url: fileUrl, throw: false });
+			if (res.status === 200) {
+				const arrayBuf = res.arrayBuffer;
+				const parentDir = diskPath.substring(0, diskPath.lastIndexOf('/'));
+				if (parentDir) await ensureFolder(this.vault, parentDir);
+
+				mute?.(diskPath);
+				try {
+					if (localFile) {
+						await this.vault.modifyBinary(localFile, arrayBuf);
+					} else {
+						await this.vault.createBinary(diskPath, arrayBuf);
+					}
+				} finally {
+					if (unmute) window.setTimeout(() => unmute(diskPath), VAULT_EVENT_SETTLE_MS);
+				}
+				return true;
+			}
+		} catch {
+			// Binary download failed
+		}
+		return false;
 	}
 
 	async syncFromManifest(
@@ -216,32 +297,8 @@ export class ManifestManager {
 			if (!needsSync) continue;
 
 			if (entry.binary) {
-				try {
-					const httpUrl = toHttpUrl(serverUrl);
-					const sep = httpUrl.endsWith('/') ? '' : '/';
-					const passParam = serverPassword ? `?password=${encodeURIComponent(serverPassword)}` : '';
-					const fileUrl = `${httpUrl}${sep}file/${encodeURIComponent(roomId)}/${encodeURI(path)}${passParam}`;
-					const res = await requestUrl({ url: fileUrl, throw: false });
-					if (res.status === 200) {
-						const arrayBuf = res.arrayBuffer;
-						const parentDir = diskPath.substring(0, diskPath.lastIndexOf('/'));
-						if (parentDir) await ensureFolder(this.vault, parentDir);
-
-						mute?.(diskPath);
-						try {
-							if (localFile) {
-								await this.vault.modifyBinary(localFile, arrayBuf);
-							} else {
-								await this.vault.createBinary(diskPath, arrayBuf);
-							}
-						} finally {
-							if (unmute) window.setTimeout(() => unmute(diskPath), VAULT_EVENT_SETTLE_MS);
-						}
-						synced++;
-					}
-				} catch {
-					// Binary download failed
-				}
+				const ok = await this.downloadBinaryFile(path, serverUrl, roomId, serverPassword, mute, unmute);
+				if (ok) synced++;
 				continue;
 			}
 
@@ -351,15 +408,39 @@ export class ManifestManager {
 		if (!this.manifest || !this.docHandle) return;
 		const normOld = toCanonicalPath(normalizePath(oldPath));
 		const normNew = toCanonicalPath(normalizePath(newPath));
-		const fileEntry = this.manifest.get(normOld);
-		if (fileEntry) {
-			this.docHandle.doc.transact(() => {
+		const oldPrefix = normOld + '/';
+		const newPrefix = normNew + '/';
+		const nestedOldKeys: string[] = [];
+
+		this.docHandle.doc.transact(() => {
+			const fileEntry = this.manifest?.get(normOld);
+			if (fileEntry) {
 				this.manifest?.delete(normOld);
 				this.manifest?.set(normNew, fileEntry);
-			});
-		}
+			}
+
+			// Rename any nested files/folders if this was a directory
+			if (this.manifest) {
+				const nestedToRename: [string, string, FileEntry][] = [];
+				for (const [key, entry] of this.manifest.entries()) {
+					if (key.startsWith(oldPrefix)) {
+						const suffix = key.slice(oldPrefix.length);
+						nestedToRename.push([key, newPrefix + suffix, entry]);
+						nestedOldKeys.push(key);
+					}
+				}
+				for (const [oldKey, newKey, entry] of nestedToRename) {
+					this.manifest.delete(oldKey);
+					this.manifest.set(newKey, entry);
+				}
+			}
+		});
+
 		if (syncManager) {
 			syncManager.releaseDoc(normOld);
+			for (const oldKey of nestedOldKeys) {
+				syncManager.releaseDoc(oldKey);
+			}
 		}
 	}
 

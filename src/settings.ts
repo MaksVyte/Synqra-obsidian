@@ -93,7 +93,7 @@ export class CollabSettingTab extends PluginSettingTab {
 					.setPlaceholder('Server password')
 					.setValue(this.plugin.settings.serverPassword ?? DEFAULT_SETTINGS.serverPassword ?? '')
 					.onChange(async (value) => {
-						this.plugin.settings.serverPassword = value;
+						this.plugin.settings.serverPassword = value.trim();
 						await this.plugin.saveSettings();
 						this.plugin.scheduleReconnect();
 					});
@@ -120,7 +120,8 @@ export class CollabSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.displayName = value.trim() || getRandomUsername();
 						await this.plugin.saveSettings();
-						this.plugin.scheduleReconnect();
+						this.plugin.presenceManager.debouncedBroadcastPresence();
+						this.plugin.onActiveFileChange();
 					}),
 			);
 
@@ -135,7 +136,8 @@ export class CollabSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.cursorColor = value.trim();
 					await this.plugin.saveSettings();
-					this.plugin.scheduleReconnect();
+					this.plugin.presenceManager.debouncedBroadcastPresence();
+					this.plugin.onActiveFileChange();
 				}),
 		);
 
@@ -146,7 +148,8 @@ export class CollabSettingTab extends PluginSettingTab {
 				.onClick(async () => {
 					this.plugin.settings.cursorColor = getRandomPresetColor();
 					await this.plugin.saveSettings();
-					this.plugin.scheduleReconnect();
+					this.plugin.presenceManager.debouncedBroadcastPresence();
+					this.plugin.onActiveFileChange();
 					this.display();
 				}),
 		);
@@ -160,6 +163,20 @@ export class CollabSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.roomId)
 					.onChange(async (value) => {
 						this.plugin.settings.roomId = value.trim() || DEFAULT_SETTINGS.roomId;
+						await this.plugin.saveSettings();
+						this.plugin.scheduleReconnect();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Shared folder')
+			.setDesc('Folder path to sync and collaborate on (e.g. "Collab"). Leave blank to sync the entire vault.')
+			.addText((text) =>
+				text
+					.setPlaceholder('Entire vault')
+					.setValue(this.plugin.settings.sharedFolder ?? '')
+					.onChange(async (value) => {
+						this.plugin.settings.sharedFolder = value.trim();
 						await this.plugin.saveSettings();
 						this.plugin.scheduleReconnect();
 					}),
@@ -387,7 +404,7 @@ export class CollabSettingTab extends PluginSettingTab {
 				throw: false,
 			});
 
-			if (res.status === 200) {
+			if (res.status === 200 || res.status === 201) {
 				new Notice(`Room '${roomId}' created successfully!`);
 				this.newRoomId = '';
 				this.newRoomDesc = '';

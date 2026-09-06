@@ -30,7 +30,7 @@ export interface DocHandle {
 	awareness: awarenessProtocol.Awareness;
 }
 
-type SyncListener = (synced: boolean) => void;
+type SyncListener = (synced: boolean, error?: string) => void;
 
 /**
  * Per-file Yjs sync manager (faithful port of the reference SyncManager).
@@ -106,8 +106,45 @@ export class SyncManager {
 		}
 		this.onStatus('disconnected');
 		for (const filePath of this.docs.keys()) {
-			this.setSynced(filePath, false);
+			this.setSynced(filePath, false, 'Disconnected from server');
 		}
+		for (const [, listeners] of Array.from(this.syncListeners.entries())) {
+			for (const listener of Array.from(listeners)) {
+				listener(false, 'Disconnected from server');
+			}
+		}
+		this.syncListeners.clear();
+		for (const awareness of this.awarenessMap.values()) {
+			const clientIds = Array.from(awareness.getStates().keys()).filter((id) => id !== awareness.doc.clientID);
+			if (clientIds.length > 0) {
+				awarenessProtocol.removeAwarenessStates(awareness, clientIds, 'disconnect');
+			}
+		}
+		this.clearAllDocs();
+	}
+
+	clearAllDocs(): void {
+		for (const [normPath, doc] of Array.from(this.docs.entries())) {
+			const updateHandler = this.updateHandlers.get(normPath);
+			if (updateHandler) {
+				doc.off('update', updateHandler);
+				this.updateHandlers.delete(normPath);
+			}
+			const awareness = this.awarenessMap.get(normPath);
+			if (awareness) {
+				const awarenessHandler = this.awarenessHandlers.get(normPath);
+				if (awarenessHandler) {
+					awareness.off('update', awarenessHandler);
+					this.awarenessHandlers.delete(normPath);
+				}
+				awareness.destroy();
+				this.awarenessMap.delete(normPath);
+			}
+			doc.destroy();
+		}
+		this.docs.clear();
+		this.synced.clear();
+		this.syncListeners.clear();
 	}
 
 	/** Get/create the per-file doc handle (subscribes when connected). */
@@ -115,14 +152,14 @@ export class SyncManager {
 		const normPath = normalizePath(filePath);
 		let doc = this.docs.get(normPath);
 		if (!doc) {
-			doc = new Y.Doc({ gc: false });
+			doc = new Y.Doc({ gc: true });
 			const awareness = new awarenessProtocol.Awareness(doc);
 			this.docs.set(normPath, doc);
 			this.awarenessMap.set(normPath, awareness);
 			this.synced.set(normPath, false);
 
 			const updateHandler = (update: Uint8Array, origin: unknown) => {
-				if (origin === 'sync' || origin === 'remote') return;
+				if (origin === 'sync' || origin === 'remote' || origin === this) return;
 				const syncEncoder = encoding.createEncoder();
 				syncProtocol.writeUpdate(syncEncoder, update);
 				this.sendMux(normPath, MUX_SYNC, encoding.toUint8Array(syncEncoder));
@@ -177,6 +214,13 @@ export class SyncManager {
 			this.sendMux(normPath, MUX_UNSUBSCRIBE);
 		}
 
+		const listeners = this.syncListeners.get(normPath);
+		if (listeners) {
+			for (const listener of Array.from(listeners)) {
+				listener(false, `Document released: ${normPath}`);
+			}
+		}
+
 		doc.destroy();
 		this.docs.delete(normPath);
 		this.synced.delete(normPath);
@@ -189,16 +233,22 @@ export class SyncManager {
 		if (this.synced.get(normPath)) return;
 
 		return new Promise<void>((resolve, reject) => {
-			const timer = window.setTimeout(() => {
+			let timer: number | null = window.setTimeout(() => {
+				timer = null;
 				listeners?.delete(listener);
 				reject(new Error(`sync timeout for ${normPath}`));
 			}, timeoutMs);
 
-			const listener: SyncListener = (isSynced) => {
-				if (isSynced) {
+			const listener: SyncListener = (isSynced, error) => {
+				if (timer !== null) {
 					window.clearTimeout(timer);
-					listeners?.delete(listener);
+					timer = null;
+				}
+				listeners?.delete(listener);
+				if (isSynced) {
 					resolve();
+				} else {
+					reject(new Error(error ?? `sync aborted for ${normPath}`));
 				}
 			};
 
@@ -272,7 +322,19 @@ export class SyncManager {
 			this.isConnected = false;
 			this.onStatus('disconnected');
 			for (const filePath of this.docs.keys()) {
-				this.setSynced(filePath, false);
+				this.setSynced(filePath, false, 'WebSocket closed');
+			}
+			for (const [, listeners] of Array.from(this.syncListeners.entries())) {
+				for (const listener of Array.from(listeners)) {
+					listener(false, 'WebSocket closed');
+				}
+			}
+			this.syncListeners.clear();
+			for (const awareness of this.awarenessMap.values()) {
+				const clientIds = Array.from(awareness.getStates().keys()).filter((id) => id !== awareness.doc.clientID);
+				if (clientIds.length > 0) {
+					awarenessProtocol.removeAwarenessStates(awareness, clientIds, 'disconnect');
+				}
 			}
 
 			if (!wasConnected && this.shouldConnect) {
@@ -391,7 +453,7 @@ export class SyncManager {
 		const syncEncoder = encoding.createEncoder();
 		const msgType = decoding.peekVarUint(decoder);
 
-		syncProtocol.readSyncMessage(decoder, syncEncoder, doc, this);
+		syncProtocol.readSyncMessage(decoder, syncEncoder, doc, 'remote');
 
 		if (encoding.length(syncEncoder) > 0) {
 			this.sendMux(docId, MUX_SYNC, encoding.toUint8Array(syncEncoder));
@@ -408,13 +470,18 @@ export class SyncManager {
 		awarenessProtocol.applyAwarenessUpdate(awareness, payload, 'remote');
 	}
 
-	private setSynced(docId: string, value: boolean): void {
+	private setSynced(docId: string, value: boolean, error?: string): void {
 		const prev = this.synced.get(docId);
 		this.synced.set(docId, value);
 		if (value && !prev) {
 			const listeners = this.syncListeners.get(docId);
 			if (listeners) {
-				for (const listener of listeners) listener(true);
+				for (const listener of Array.from(listeners)) listener(true);
+			}
+		} else if (!value && prev) {
+			const listeners = this.syncListeners.get(docId);
+			if (listeners) {
+				for (const listener of Array.from(listeners)) listener(false, error);
 			}
 		}
 	}

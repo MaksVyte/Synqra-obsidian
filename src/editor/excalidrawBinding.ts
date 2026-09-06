@@ -3,6 +3,8 @@ import * as Y from 'yjs';
 import type * as awarenessProtocol from 'y-protocols/awareness';
 import type { SyncManager } from '../syncManager';
 import type { CursorUser } from '../types';
+import type { ManifestManager } from '../files/manifestManager';
+import { applyMinimalYTextUpdate, getFileByPath, isExcalidrawFile, normalizeLineEndings, toLocalPath } from '../utils';
 import { reconcileExcalidrawElements, type ExcalidrawElementStub } from './excalidrawReconcile';
 
 export interface ExcalidrawCollaborator {
@@ -52,12 +54,19 @@ export class ExcalidrawBinding {
 	private syncIntervalTimer: number | null = null;
 	private isApplyingRemote = false;
 	private lastBroadcastFingerprints = new Map<string, string>();
+	private lastElementVersions = new Map<string, number>();
+	private saveDebounceTimer: number | null = null;
+	private manifestManager: ManifestManager | null = null;
 
 	constructor(
 		private readonly app: App,
 		private readonly sync: SyncManager,
 		private readonly hasFile: (path: string) => boolean,
 	) {}
+
+	setManifestManager(manifestManager: ManifestManager): void {
+		this.manifestManager = manifestManager;
+	}
 
 	async activateForFile(
 		file: TFile | null,
@@ -69,15 +78,22 @@ export class ExcalidrawBinding {
 			this.currentCursorUser = cursorUser;
 		}
 
+		if (!file || !isExcalidrawFile(file.path) || !this.hasFile(file.path)) {
+			this.unbind();
+			return false;
+		}
+
 		let excalidrawView: unknown = null;
 		let excalidrawAPI: ExcalidrawApi | null = null;
 
 		for (let attempt = 0; attempt < 8; attempt++) {
 			this.app.workspace.iterateAllLeaves((l) => {
-				const view = l.view as { getViewType?: () => string; excalidrawAPI?: ExcalidrawApi };
+				const view = l.view as { getViewType?: () => string; excalidrawAPI?: ExcalidrawApi; file?: { path: string } };
 				if (view && (view.getViewType?.() === 'excalidraw' || view.excalidrawAPI)) {
-					excalidrawView = view;
-					excalidrawAPI = view.excalidrawAPI ?? null;
+					if (!file || !view.file || view.file.path === file.path) {
+						excalidrawView = view;
+						excalidrawAPI = view.excalidrawAPI ?? null;
+					}
 				}
 			});
 			if (excalidrawAPI) break;
@@ -211,6 +227,7 @@ export class ExcalidrawBinding {
 						}
 					}
 				}
+				this.scheduleSaveToDisk();
 			} finally {
 				this.isApplyingRemote = false;
 			}
@@ -240,16 +257,29 @@ export class ExcalidrawBinding {
 		const viewDom = (excalidrawView as { contentEl?: HTMLElement })?.contentEl;
 		if (viewDom) {
 			const onPointerMove = (e: PointerEvent | TouchEvent) => {
-				if ('clientX' in e && this.currentAwareness) {
-					const rect = viewDom.getBoundingClientRect();
-					const appState = activeAPI.getAppState?.() || {};
-					const zoom = appState.zoom?.value || 1;
-					const scrollX = appState.scrollX || 0;
-					const scrollY = appState.scrollY || 0;
-					const canvasX = (e.clientX - rect.left - scrollX) / zoom;
-					const canvasY = (e.clientY - rect.top - scrollY) / zoom;
-					this.currentAwareness.setLocalStateField('pointer', { x: canvasX, y: canvasY });
+				if (!this.currentAwareness) return;
+				let clientX: number | undefined;
+				let clientY: number | undefined;
+				if ('clientX' in e && typeof e.clientX === 'number') {
+					clientX = e.clientX;
+					clientY = e.clientY;
+				} else if ('touches' in e && e.touches.length > 0) {
+					const touch = e.touches[0];
+					if (touch) {
+						clientX = touch.clientX;
+						clientY = touch.clientY;
+					}
 				}
+				if (clientX === undefined || clientY === undefined) return;
+
+				const rect = viewDom.getBoundingClientRect();
+				const appState = activeAPI.getAppState?.() || {};
+				const zoom = appState.zoom?.value || 1;
+				const scrollX = appState.scrollX || 0;
+				const scrollY = appState.scrollY || 0;
+				const canvasX = (clientX - rect.left - scrollX) / zoom;
+				const canvasY = (clientY - rect.top - scrollY) / zoom;
+				this.currentAwareness.setLocalStateField('pointer', { x: canvasX, y: canvasY });
 			};
 
 			const onPointerUp = () => {
@@ -316,11 +346,17 @@ export class ExcalidrawBinding {
 		yElements: Y.Map<string>,
 		ydoc: Y.Doc,
 	): void {
-		if (this.isApplyingRemote || !excalidrawAPI) return;
+		if (this.isApplyingRemote || !excalidrawAPI || !this.currentPath) return;
+
+		const viewDom = (this.currentView as { contentEl?: HTMLElement })?.contentEl;
+		if (!viewDom || !viewDom.isConnected) {
+			return;
+		}
+
 		const elements = excalidrawAPI.getSceneElementsIncludingDeleted?.() ??
 			excalidrawAPI.getSceneElements?.() ??
 			[];
-		if (elements.length === 0 && this.lastBroadcastFingerprints.size === 0) return;
+		if (elements.length === 0) return;
 
 		const currentIds = new Set<string>();
 		const changed: ExcalidrawElementStub[] = [];
@@ -328,6 +364,9 @@ export class ExcalidrawBinding {
 
 		for (const el of elements) {
 			currentIds.add(el.id);
+			if (typeof el.version === 'number') {
+				this.lastElementVersions.set(el.id, el.version);
+			}
 			if (el.isDeleted) {
 				if (this.lastBroadcastFingerprints.has(el.id)) {
 					deletedIds.push(el.id);
@@ -343,29 +382,21 @@ export class ExcalidrawBinding {
 			}
 		}
 
-		// Also check for elements removed from the scene array entirely
-		for (const [id] of this.lastBroadcastFingerprints) {
-			if (!currentIds.has(id)) {
-				deletedIds.push(id);
-			}
-		}
-
-		for (const id of deletedIds) {
-			this.lastBroadcastFingerprints.delete(id);
-		}
-
 		if (changed.length > 0 || deletedIds.length > 0) {
 			ydoc.transact(() => {
 				for (const el of changed) {
 					yElements.set(el.id, JSON.stringify(el));
 				}
 				for (const id of deletedIds) {
+					const lastVer = this.lastElementVersions.get(id) ?? 1;
+					const newVer = lastVer + 1;
+					this.lastElementVersions.set(id, newVer);
 					yElements.set(
 						id,
 						JSON.stringify({
 							id,
 							isDeleted: true,
-							version: 999999,
+							version: newVer,
 							versionNonce: Math.floor(Math.random() * 1000000),
 						}),
 					);
@@ -374,10 +405,60 @@ export class ExcalidrawBinding {
 		}
 	}
 
-	unbind(): void {
+	private scheduleSaveToDisk(): void {
+		if (this.saveDebounceTimer !== null) {
+			window.clearTimeout(this.saveDebounceTimer);
+		}
+		this.saveDebounceTimer = window.setTimeout(() => {
+			this.saveDebounceTimer = null;
+			void this.flushExcalidrawDiskContent();
+		}, 1000);
+	}
+
+	private async flushExcalidrawDiskContent(targetPath?: string, targetView?: unknown): Promise<void> {
+		const path = targetPath ?? this.currentPath;
+		if (!path) return;
+		const view = (targetView ?? this.currentView) as { save?: (prompt?: boolean) => Promise<void>; file?: TFile };
+		if (typeof view?.save === 'function') {
+			try {
+				await view.save(false);
+			} catch {
+				// Ignore save error
+			}
+		}
+		const file = view?.file ?? getFileByPath(this.app.vault, toLocalPath(path));
+		if (file) {
+			try {
+				const content = normalizeLineEndings(await this.app.vault.read(file));
+				const docHandle = this.sync.getDoc(path);
+				if (docHandle && content && docHandle.text.toString() !== content) {
+					applyMinimalYTextUpdate(docHandle.doc, docHandle.text, content);
+				}
+				if (this.manifestManager) {
+					await this.manifestManager.updateFile(file, content);
+				}
+			} catch {
+				// Ignore file read error
+			}
+		}
+	}
+
+	unbind(skipFlush = false): void {
 		if (this.syncIntervalTimer !== null) {
 			window.clearInterval(this.syncIntervalTimer);
 			this.syncIntervalTimer = null;
+		}
+
+		if (this.saveDebounceTimer !== null) {
+			window.clearTimeout(this.saveDebounceTimer);
+			this.saveDebounceTimer = null;
+		}
+
+		const pathToFlush = this.currentPath;
+		const viewToFlush = this.currentView;
+
+		if (pathToFlush && !skipFlush) {
+			void this.flushExcalidrawDiskContent(pathToFlush, viewToFlush);
 		}
 
 		if (this.domCleanup) {
@@ -385,8 +466,8 @@ export class ExcalidrawBinding {
 			this.domCleanup = null;
 		}
 
-		if (this.yElementsObserver && this.currentPath) {
-			const docHandle = this.sync.getDoc(this.currentPath);
+		if (this.yElementsObserver && pathToFlush) {
+			const docHandle = this.sync.getDoc(pathToFlush);
 			if (docHandle) {
 				const yElements = docHandle.doc.getMap<string>('excalidraw_elements');
 				yElements.unobserve(this.yElementsObserver);
@@ -409,6 +490,11 @@ export class ExcalidrawBinding {
 		this.currentPath = null;
 		this.currentView = null;
 		this.lastBroadcastFingerprints.clear();
+		this.lastElementVersions.clear();
+	}
+
+	getCurrentPath(): string | null {
+		return this.currentPath;
 	}
 
 	destroy(): void {

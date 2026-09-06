@@ -6,6 +6,7 @@ import {
 	applyMinimalYTextUpdate,
 	ensureFolder,
 	getFileByPath,
+	isExcalidrawFile,
 	isTextFile,
 	normalizeLineEndings,
 	normalizePath,
@@ -36,19 +37,29 @@ export class BackgroundSync {
 
 	async startAll(): Promise<void> {
 		const entries = this.manifestManager.getEntries();
+		const paths: string[] = [];
 		for (const [path, entry] of entries) {
-			if (!isTextFile(path) || entry.binary) continue;
-			try {
-				await this.subscribe(path);
-			} catch {
-				new Notice(`[Synqra] failed to sync ${path}`);
-			}
+			if (!isTextFile(path) || entry.binary || isExcalidrawFile(path)) continue;
+			paths.push(path);
+		}
+		const BATCH_SIZE = 10;
+		for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+			const batch = paths.slice(i, i + BATCH_SIZE);
+			await Promise.all(
+				batch.map(async (p) => {
+					try {
+						await this.subscribe(p);
+					} catch {
+						new Notice(`[Synqra] failed to sync ${p}`);
+					}
+				}),
+			);
 		}
 	}
 
 	async subscribe(rawPath: string): Promise<void> {
 		const path = toCanonicalPath(normalizePath(rawPath));
-		if (!this.manifestManager.hasFile(path)) return;
+		if (isExcalidrawFile(path) || !this.manifestManager.hasFile(path)) return;
 		if (this.observers.has(path) || this.subscribing.has(path)) return;
 		this.subscribing.add(path);
 
@@ -79,6 +90,8 @@ export class BackgroundSync {
 				} else {
 					this.lastWrittenContent.set(path, localContent);
 				}
+			} else {
+				await this.writeToDisk(path, remoteContent);
 			}
 
 			this.attachObserver(path, docHandle.text);
@@ -93,15 +106,17 @@ export class BackgroundSync {
 		this.activeFile = path;
 
 		if (oldActive && oldActive !== path) {
-			if (this.manifestManager.hasFile(oldActive)) {
+			if (!isExcalidrawFile(oldActive) && this.manifestManager.hasFile(oldActive)) {
 				const diskPath = toLocalPath(oldActive);
 				const file = getFileByPath(this.vault, diskPath);
 				if (file) {
 					const docHandle = this.syncManager.getDoc(oldActive);
 					if (docHandle) {
 						const content = docHandle.text.toString();
-						void this.writeToDisk(oldActive, content);
-						void this.manifestManager.updateFile(file, content);
+						if (content.length > 0) {
+							void this.writeToDisk(oldActive, content);
+							void this.manifestManager.updateFile(file, content);
+						}
 					}
 				}
 			}
@@ -114,7 +129,7 @@ export class BackgroundSync {
 
 	async onFileAdded(rawPath: string): Promise<void> {
 		const path = toCanonicalPath(normalizePath(rawPath));
-		if (!isTextFile(path)) return;
+		if (!isTextFile(path) || isExcalidrawFile(path)) return;
 		await this.subscribe(path);
 	}
 
@@ -155,12 +170,20 @@ export class BackgroundSync {
 
 		if (isTextFile(normNew)) {
 			await this.subscribe(normNew);
+		} else {
+			// If a folder was renamed, re-subscribe all nested text files
+			const newPrefix = normNew + '/';
+			for (const [path, entry] of this.manifestManager.getEntries()) {
+				if (path.startsWith(newPrefix) && isTextFile(path) && !entry.binary && !entry.directory) {
+					void this.subscribe(path);
+				}
+			}
 		}
 	}
 
 	async handleLocalTextModify(rawPath: string): Promise<void> {
 		const path = toCanonicalPath(normalizePath(rawPath));
-		if (!this.manifestManager.hasFile(path)) return;
+		if (isExcalidrawFile(path) || !this.manifestManager.hasFile(path)) return;
 		if (this.isRecentDiskWrite(path)) return;
 		if (path === this.collabBoundFile) return;
 
@@ -241,7 +264,9 @@ export class BackgroundSync {
 	private writeToDisk(path: string, content: string): Promise<void> {
 		if (!this.manifestManager.hasFile(path)) return Promise.resolve();
 		if (this.lastWrittenContent.get(path) === content) return Promise.resolve();
-		this.writeQueue = this.writeQueue.then(() => this.doWriteToDisk(path, content));
+		this.writeQueue = this.writeQueue
+			.catch(() => {})
+			.then(() => this.doWriteToDisk(path, content));
 		return this.writeQueue;
 	}
 
@@ -264,6 +289,10 @@ export class BackgroundSync {
 			if (parentDir) await ensureFolder(this.vault, parentDir);
 			await this.vault.adapter.write(diskPath, content);
 			this.lastWrittenContent.set(path, content);
+			const written = getFileByPath(this.vault, diskPath);
+			if (written) {
+				void this.manifestManager.updateFile(written, content);
+			}
 		} catch {
 			new Notice(`[Synqra] failed to write ${diskPath}`);
 		} finally {
