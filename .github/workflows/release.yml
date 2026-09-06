@@ -38,22 +38,13 @@ jobs:
                       main.js
                       ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
 
-            - name: Create or update release
+            - name: Create release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
                   tag="${GITHUB_REF#refs/tags/}"
-                  assets="main.js manifest.json"
-                  if [ -f styles.css ]; then
-                    assets="$assets styles.css"
-                  fi
 
-                  if gh release view "$tag" > /dev/null 2>&1; then
-                    echo "Release $tag already exists, updating assets and publishing..."
-                    gh release upload "$tag" --clobber $assets
-                    gh release edit "$tag" --draft=false --latest
-                  else
-                    gh release create "$tag" \
-                      --title="$tag" \
-                      $assets
-                  fi
+                  gh release create "$tag" \
+                    --title="$tag" \
+                    --draft \
+                    main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
