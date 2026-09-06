@@ -56,6 +56,10 @@ export class CollabSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	getSettingDefinitions(): unknown[] {
+		return [];
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();

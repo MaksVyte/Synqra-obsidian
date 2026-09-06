@@ -227,7 +227,7 @@ export class BackgroundSync {
 		this.lastWrittenContent.clear();
 	}
 
-	private attachObserver(path: string, text: Y.Text): void {
+	private attachObserver(path: string, text: Y.Text & { toString(): string }): void {
 		const observer = (_event: Y.YTextEvent, transaction: Y.Transaction) => {
 			if (transaction.local) return;
 			if (path === this.collabBoundFile) return;
@@ -248,7 +248,7 @@ export class BackgroundSync {
 		}
 	}
 
-	private scheduleDiskWrite(path: string, text: Y.Text): void {
+	private scheduleDiskWrite(path: string, text: Y.Text & { toString(): string }): void {
 		const existing = this.writeTimers.get(path);
 		if (existing) window.clearTimeout(existing);
 		this.writeTimers.set(

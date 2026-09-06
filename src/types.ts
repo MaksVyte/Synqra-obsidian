@@ -1,3 +1,9 @@
+declare module 'yjs' {
+	interface Text {
+		toString(): string;
+	}
+}
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
 export interface RoomInfo {

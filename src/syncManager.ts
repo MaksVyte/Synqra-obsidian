@@ -26,7 +26,7 @@ const MAX_RECONNECT_ATTEMPTS = 15;
 
 export interface DocHandle {
 	doc: Y.Doc;
-	text: Y.Text;
+	text: Y.Text & { toString(): string };
 	awareness: awarenessProtocol.Awareness;
 }
 

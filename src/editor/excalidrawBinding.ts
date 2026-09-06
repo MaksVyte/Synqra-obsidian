@@ -29,15 +29,15 @@ export interface ExcalidrawApi {
 function getElementFingerprint(el: ExcalidrawElementStub | Record<string, unknown>): string {
 	const points = Array.isArray(el.points) ? el.points : [];
 	const pointsLen = points.length;
-	const id = String(el.id ?? '');
-	const version = String(el.version ?? '');
-	const nonce = String(el.versionNonce ?? '');
-	const x = String(el.x ?? '');
-	const y = String(el.y ?? '');
-	const w = String(el.width ?? '');
-	const h = String(el.height ?? '');
+	const id = typeof el.id === 'string' || typeof el.id === 'number' ? String(el.id) : '';
+	const version = typeof el.version === 'string' || typeof el.version === 'number' ? String(el.version) : '';
+	const nonce = typeof el.versionNonce === 'string' || typeof el.versionNonce === 'number' ? String(el.versionNonce) : '';
+	const x = typeof el.x === 'number' ? String(el.x) : '';
+	const y = typeof el.y === 'number' ? String(el.y) : '';
+	const w = typeof el.width === 'number' ? String(el.width) : '';
+	const h = typeof el.height === 'number' ? String(el.height) : '';
 	const del = el.isDeleted ? 1 : 0;
-	const text = String(el.text ?? '');
+	const text = typeof el.text === 'string' ? el.text : '';
 	return `${id}_${version}_${nonce}_${x}_${y}_${w}_${h}_${pointsLen}_${del}_${text}`;
 }
 

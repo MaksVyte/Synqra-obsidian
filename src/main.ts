@@ -90,13 +90,15 @@ export default class CollabPlugin extends Plugin {
 			}
 		});
 
-		this.controlChannel.onMessage(async (msg) => {
-			if (msg.type === 'file-op') {
-				await this.fileOpsManager.applyRemoteOp(msg.op);
-			} else if (msg.type === 'room-deleted') {
-				new Notice(`[Synqra] ${msg.message || 'Room was deleted by an admin'}`);
-				this.disconnect();
-			}
+		this.controlChannel.onMessage((msg) => {
+			void (async () => {
+				if (msg.type === 'file-op') {
+					await this.fileOpsManager.applyRemoteOp(msg.op);
+				} else if (msg.type === 'room-deleted') {
+					new Notice(`[Synqra] ${msg.message || 'Room was deleted by an admin'}`);
+					this.disconnect();
+				}
+			})();
 		});
 
 		// Register CM6 base extension
