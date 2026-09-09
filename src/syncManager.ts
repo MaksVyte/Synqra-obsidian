@@ -58,6 +58,11 @@ export class SyncManager {
 	private keepaliveTimer: number | null = null;
 	private generation = 0;
 
+	public readonly sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+	get connected(): boolean {
+		return this.isConnected;
+	}
+
 	onStatus: (status: ConnectionStatus) => void = () => {};
 	private displayName = 'Anonymous';
 
@@ -96,6 +101,15 @@ export class SyncManager {
 			this.keepaliveTimer = null;
 		}
 		if (this.ws) {
+			if (this.ws.readyState === WebSocket.OPEN) {
+				for (const awareness of this.awarenessMap.values()) {
+					try {
+						awarenessProtocol.removeAwarenessStates(awareness, [awareness.doc.clientID], 'disconnect');
+					} catch {
+						// Ignore
+					}
+				}
+			}
 			const ws = this.ws;
 			this.ws = null;
 			try {
@@ -115,7 +129,7 @@ export class SyncManager {
 		}
 		this.syncListeners.clear();
 		for (const awareness of this.awarenessMap.values()) {
-			const clientIds = Array.from(awareness.getStates().keys()).filter((id) => id !== awareness.doc.clientID);
+			const clientIds = Array.from(awareness.getStates().keys());
 			if (clientIds.length > 0) {
 				awarenessProtocol.removeAwarenessStates(awareness, clientIds, 'disconnect');
 			}
@@ -345,13 +359,13 @@ export class SyncManager {
 					const probeUrl = `${httpBase}${sep}file/${encodeURIComponent(roomId)}/__probe__${passParam ? '?' + passParam.slice(1) : ''}`;
 					const res = await requestUrl({ url: probeUrl, throw: false });
 					if (res.status === 401) {
-						new Notice('[Synqra] Authentication error: Invalid server password. Please check your settings.');
+						new Notice('Authentication error: invalid server password. Please check your settings.');
 						this.shouldConnect = false;
 						return;
 					} else if (res.status === 404) {
 						const json = res.json as { error?: string };
 						if (json?.error && json.error.includes('Room')) {
-							new Notice(`[Synqra] Room '${roomId}' does not exist on the server. Ask an admin to create it.`);
+							new Notice(`Room '${roomId}' does not exist on the server. Ask an admin to create it.`);
 							this.shouldConnect = false;
 							return;
 						}

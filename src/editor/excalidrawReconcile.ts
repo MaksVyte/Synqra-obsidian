@@ -18,8 +18,14 @@ export interface ExcalidrawElementStub {
 export function reconcileExcalidrawElements<T extends ExcalidrawElementStub>(
 	localElements: readonly T[],
 	remoteElements: readonly T[],
-	activeLocalElementId?: string,
+	activeLocalElementIds?: Set<string> | string,
 ): T[] {
+	const activeSet = activeLocalElementIds instanceof Set
+		? activeLocalElementIds
+		: typeof activeLocalElementIds === 'string'
+			? new Set([activeLocalElementIds])
+			: new Set<string>();
+
 	const localMap = new Map<string, { element: T; index: number }>();
 	localElements.forEach((el, index) => {
 		localMap.set(el.id, { element: el, index });
@@ -43,8 +49,24 @@ export function reconcileExcalidrawElements<T extends ExcalidrawElementStub>(
 			continue;
 		}
 
-		// If local user is actively drawing/dragging this element, protect local state
-		if (activeLocalElementId && local.id === activeLocalElementId) {
+		// If local user is actively drawing/dragging/editing this element, protect local state
+		if (activeSet.has(local.id)) {
+			reconciled.push(local);
+			continue;
+		}
+
+		// Remote deletion precedence: if remote deleted this element, deletion wins unless actively drawn
+		if (remote.isDeleted) {
+			if (activeSet.has(local.id)) {
+				reconciled.push(local);
+			} else {
+				reconciled.push(remote);
+			}
+			continue;
+		}
+
+		// Local deletion precedence: if local deleted this element, deletion wins
+		if (local.isDeleted) {
 			reconciled.push(local);
 			continue;
 		}
@@ -61,15 +83,24 @@ export function reconcileExcalidrawElements<T extends ExcalidrawElementStub>(
 				reconciled.push(local);
 			}
 		} else {
-			// For identical version & nonce (e.g. live freedraw points), accept remote
-			reconciled.push(remote);
+			// Identical version & nonce (e.g. live freedraw points):
+			// Keep local if local has equal or more points
+			const localPts = Array.isArray(local.points) ? local.points.length : 0;
+			const remotePts = Array.isArray(remote.points) ? remote.points.length : 0;
+			if (localPts >= remotePts) {
+				reconciled.push(local);
+			} else {
+				reconciled.push(remote);
+			}
 		}
 	}
 
 	// Append any new elements introduced by remote
 	for (const remote of remoteElements) {
 		if (!visitedIds.has(remote.id)) {
-			reconciled.push(remote);
+			if (!remote.isDeleted) {
+				reconciled.push(remote);
+			}
 		}
 	}
 

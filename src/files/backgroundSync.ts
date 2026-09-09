@@ -81,11 +81,13 @@ export class BackgroundSync {
 			if (file) {
 				const localContent = normalizeLineEndings(await this.vault.read(file));
 				if (remoteContent !== localContent) {
-					if (remoteContent.length === 0 && localContent.length > 0) {
+					if (remoteContent.length > 0) {
+						// Server has authoritative content: overwrite disk
+						await this.writeToDisk(path, remoteContent);
+					} else if (localContent.length > 0) {
+						// New file locally and empty on server: initialize remote doc
 						applyMinimalYTextUpdate(docHandle.doc, docHandle.text, localContent);
 						this.lastWrittenContent.set(path, localContent);
-					} else {
-						await this.writeToDisk(path, remoteContent);
 					}
 				} else {
 					this.lastWrittenContent.set(path, localContent);
@@ -182,6 +184,7 @@ export class BackgroundSync {
 	}
 
 	async handleLocalTextModify(rawPath: string): Promise<void> {
+		if (!this.syncManager.connected) return;
 		const path = toCanonicalPath(normalizePath(rawPath));
 		if (isExcalidrawFile(path) || !this.manifestManager.hasFile(path)) return;
 		if (this.isRecentDiskWrite(path)) return;

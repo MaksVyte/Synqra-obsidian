@@ -95,9 +95,9 @@ export class EditorBinding {
 
 		let view: EditorView | null = null;
 
-		for (let attempt = 0; attempt < 8; attempt++) {
+		for (let attempt = 0; attempt < 12; attempt++) {
 			const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
-			if (mdView?.editor) {
+			if (mdView?.editor && mdView.file?.path === filePath) {
 				const cm = (mdView.editor as unknown as { cm?: EditorView }).cm;
 				if (cm && !(cm as unknown as { destroyed?: boolean }).destroyed) {
 					view = cm;
@@ -123,7 +123,7 @@ export class EditorBinding {
 			await this.sync.waitForSync(filePath);
 		} catch {
 			if (this.activationGen !== gen) return false;
-			new Notice('[Synqra] sync timed out');
+			new Notice('Sync timed out');
 			this.unbind();
 			return false;
 		}
@@ -147,8 +147,18 @@ export class EditorBinding {
 					name: userToUse.name,
 					color: userToUse.color,
 					colorLight: userToUse.color + '33',
+					sessionId: this.sync.sessionId,
 				},
 			});
+		}
+
+		let diskContent = '';
+		if (file && this.app.vault.getAbstractFileByPath(file.path)) {
+			try {
+				diskContent = normalizeLineEndings(await this.app.vault.read(file));
+			} catch {
+				diskContent = '';
+			}
 		}
 
 		const localContent = normalizeLineEndings(view.state.doc.toString());
@@ -158,21 +168,14 @@ export class EditorBinding {
 		const extensions: Extension[] = [
 			ySyncFacet.of(ySyncConfig),
 			ySync,
-			createRemoteCursorPlugin(docHandle.text, docHandle.awareness),
+			createRemoteCursorPlugin(docHandle.text, docHandle.awareness, this.sync.sessionId),
 		];
 
-		if (remoteContent !== localContent) {
-			if (remoteContent.length === 0 && localContent.length > 0) {
-				applyMinimalYTextUpdate(docHandle.doc, docHandle.text, localContent);
-				view.dispatch({
-					effects: this.compartment.reconfigure(extensions),
-				});
-			} else if (localContent.length === 0 && remoteContent.length > 0) {
+		if (remoteContent.length > 0) {
+			// Server has authoritative content. Always overwrite local editor & disk if they differ.
+			if (localContent !== remoteContent) {
 				view.dispatch({
 					changes: { from: 0, to: view.state.doc.length, insert: remoteContent },
-				});
-				view.dispatch({
-					effects: this.compartment.reconfigure(extensions),
 				});
 				if (file && this.hasFile(filePath) && this.app.vault.getAbstractFileByPath(file.path)) {
 					try {
@@ -181,19 +184,16 @@ export class EditorBinding {
 						// Ignore concurrent write
 					}
 				}
-			} else {
-				// Both have content but differ (e.g. offline edits made locally)
-				// Apply minimal diff to Yjs CRDT so offline local edits are merged rather than erased
-				applyMinimalYTextUpdate(docHandle.doc, docHandle.text, localContent);
-				const mergedContent = docHandle.text.toString();
-				view.dispatch({
-					changes: { from: 0, to: view.state.doc.length, insert: mergedContent },
-				});
-				view.dispatch({
-					effects: this.compartment.reconfigure(extensions),
-				});
 			}
+			view.dispatch({
+				effects: this.compartment.reconfigure(extensions),
+			});
 		} else {
+			// Remote content is empty (new document on server)
+			// Only seed initial content from local disk if this file actually has content on disk
+			if (localContent.length > 0 && diskContent === localContent) {
+				applyMinimalYTextUpdate(docHandle.doc, docHandle.text, localContent);
+			}
 			view.dispatch({
 				effects: this.compartment.reconfigure(extensions),
 			});

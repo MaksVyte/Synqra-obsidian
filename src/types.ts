@@ -53,7 +53,7 @@ export const DEFAULT_SETTINGS: CollabSettings = {
 	serverPassword: 'changethispassword',
 	adminPassword: '',
 	displayName: 'Anonymous',
-	roomId: 'vault-a',
+	roomId: '',
 	autoConnect: true,
 	cursorColor: '#30bced',
 	sharedFolder: '',

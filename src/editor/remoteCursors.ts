@@ -14,6 +14,7 @@ interface AwarenessUserState {
 		name?: string;
 		color?: string;
 		colorLight?: string;
+		sessionId?: string;
 	};
 }
 
@@ -119,6 +120,7 @@ class RemoteCursorMarker implements LayerMarker {
 export function createRemoteCursorPlugin(
 	ytext: Y.Text,
 	awareness: awarenessProtocol.Awareness,
+	localSessionId?: string,
 ): Extension {
 	const awarenessTracker = ViewPlugin.fromClass(
 		class {
@@ -127,7 +129,15 @@ export function createRemoteCursorPlugin(
 			constructor(readonly view: EditorView) {
 				this.listener = ({ added, updated, removed }) => {
 					const clients = added.concat(updated, removed);
-					if (clients.some((id) => id !== awareness.doc.clientID)) {
+					const hasRemote = clients.some((id) => {
+						if (id === awareness.doc.clientID) return false;
+						if (localSessionId) {
+							const st = awareness.getStates().get(id) as AwarenessUserState | undefined;
+							if (st?.user?.sessionId === localSessionId) return false;
+						}
+						return true;
+					});
+					if (hasRemote) {
 						if (view.dom && view.dom.isConnected) {
 							try {
 								view.dispatch({ annotations: [remoteCursorsAnnotation.of(clients)] });
@@ -203,6 +213,7 @@ export function createRemoteCursorPlugin(
 			awareness.getStates().forEach((rawState, clientId) => {
 				if (clientId === awareness.doc.clientID) return;
 				const state = rawState as AwarenessUserState;
+				if (localSessionId && state?.user?.sessionId === localSessionId) return;
 				const cursor = state?.cursor;
 				if (!cursor || !cursor.anchor || !cursor.head) return;
 
@@ -255,6 +266,7 @@ export function createRemoteCursorPlugin(
 			awareness.getStates().forEach((rawState, clientId) => {
 				if (clientId === awareness.doc.clientID) return;
 				const state = rawState as AwarenessUserState;
+				if (localSessionId && state?.user?.sessionId === localSessionId) return;
 				const cursor = state?.cursor;
 				if (!cursor || !cursor.head) return;
 

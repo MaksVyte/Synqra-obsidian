@@ -93,3 +93,28 @@
 	padding: 16px;
 	margin-top: 12px;
 }
+
+/* Rooms Collapsible Accordion */
+.synqra-rooms-section {
+	margin: 8px 0;
+}
+
+.synqra-rooms-details {
+	margin-top: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 4px 8px;
+	background-color: var(--background-secondary);
+}
+
+.synqra-rooms-summary {
+	cursor: pointer;
+	font-weight: 500;
+	padding: 8px 4px;
+	user-select: none;
+	color: var(--text-muted);
+}
+
+.synqra-rooms-summary:hover {
+	color: var(--text-normal);
+}

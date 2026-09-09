@@ -24,6 +24,7 @@ export default class CollabPlugin extends Plugin {
 	editorBinding!: EditorBinding;
 	excalidrawBinding!: ExcalidrawBinding;
 	presenceManager!: PresenceManager;
+	public onStatusChange?: (status: ConnectionStatus) => void;
 
 	private statusBar: HTMLElement | null = null;
 	private currentStatus: ConnectionStatus = 'disconnected';
@@ -111,6 +112,7 @@ export default class CollabPlugin extends Plugin {
 			if (status === 'connected') {
 				void this.onConnected();
 			}
+			this.onStatusChange?.(status);
 		};
 
 		this.controlChannel.onStatusChange = (status) => {
@@ -195,11 +197,11 @@ export default class CollabPlugin extends Plugin {
 
 	async publishManifest(): Promise<void> {
 		if (this.currentStatus !== 'connected') {
-			new Notice('[Synqra] please connect to room first');
+			new Notice('Please connect to room first');
 			return;
 		}
 		await this.manifestManager.publishManifest();
-		new Notice('[Synqra] vault manifest published');
+		new Notice('Vault manifest published');
 	}
 
 	onActiveFileChange(): void {

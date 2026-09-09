@@ -4,6 +4,7 @@ import {
 	DEFAULT_SETTINGS,
 	getRandomPresetColor,
 	getRandomUsername,
+	type CollabSettings,
 	type RoomInfo,
 } from './types';
 import { toHttpUrl } from './utils';
@@ -16,7 +17,7 @@ class ConfirmDeleteModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.empty();
-		new Setting(contentEl).setName(`Delete Room '${this.roomId}'?`).setHeading();
+		new Setting(contentEl).setName(`Delete room '${this.roomId}'?`).setHeading();
 		contentEl.createEl('p', {
 			text: `Are you sure you want to delete room '${this.roomId}' from the server? All notes, history, and files in this room will be permanently erased.`,
 		});
@@ -29,7 +30,7 @@ class ConfirmDeleteModal extends Modal {
 			)
 			.addButton((btn) =>
 				btn
-					.setButtonText('Delete Permanently')
+					.setButtonText('Delete permanently')
 					.setWarning()
 					.onClick(async () => {
 						this.close();
@@ -45,15 +46,36 @@ class ConfirmDeleteModal extends Modal {
 
 export class CollabSettingTab extends PluginSettingTab {
 	plugin: CollabPlugin;
+	private draftSettings: CollabSettings | null = null;
 	private isAdminUnlocked = false;
 	private adminRooms: RoomInfo[] = [];
 	private isLoadingRooms = false;
 	private newRoomId = '';
 	private newRoomDesc = '';
 
+	// Server rooms state
+	private serverRooms: RoomInfo[] = [];
+	private isLoadingServerRooms = false;
+	private roomsContainerEl: HTMLElement | null = null;
+	private isRoomsExpanded = false;
+	private pollTimer: number | null = null;
+
 	constructor(app: App, plugin: CollabPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	override hide(): void {
+		super.hide();
+		if (this.pollTimer !== null) {
+			window.clearInterval(this.pollTimer);
+			this.pollTimer = null;
+		}
+		if (this.plugin.onStatusChange) {
+			this.plugin.onStatusChange = undefined;
+		}
+		this.draftSettings = null;
+		this.roomsContainerEl = null;
 	}
 
 	getSettingDefinitions(): unknown[] {
@@ -64,11 +86,28 @@ export class CollabSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		if (!this.draftSettings) {
+			this.draftSettings = Object.assign({}, this.plugin.settings);
+		}
+		const draft = this.draftSettings;
+
+		this.plugin.onStatusChange = () => {
+			this.renderRoomsList();
+		};
+
+		// Start background room polling every 4 seconds
+		if (this.pollTimer === null) {
+			this.pollTimer = window.setInterval(() => {
+				void this.fetchServerRooms(true);
+			}, 4000);
+		}
+		void this.fetchServerRooms(true);
+
 		new Setting(containerEl).setName('Connection').setHeading();
 
 		// Warning banner
 		const banner = containerEl.createDiv({ cls: 'synqra-warning' });
-		banner.createDiv({ cls: 'synqra-warning-title', text: '⚠️ Shared Vault Warning' });
+		banner.createDiv({ cls: 'synqra-warning-title', text: '⚠️ Shared vault warning' });
 		banner.createEl('p', {
 			text: 'Connecting to a room will sync your local vault with the server. Any local files not present on the server will be moved to your local system trash.',
 		});
@@ -79,27 +118,23 @@ export class CollabSettingTab extends PluginSettingTab {
 			.setDesc('WebSocket endpoint of the collab server, e.g. ws://127.0.0.1:5612 or https://collab.example.com')
 			.addText((text) =>
 				text
-					.setPlaceholder('ws://127.0.0.1:5612')
-					.setValue(this.plugin.settings.serverUrl)
-					.onChange(async (value) => {
-						this.plugin.settings.serverUrl = value.trim();
-						await this.plugin.saveSettings();
-						this.plugin.scheduleReconnect();
+					.setPlaceholder('Example: ws://127.0.0.1:5612')
+					.setValue(draft.serverUrl)
+					.onChange((value) => {
+						draft.serverUrl = value.trim();
 					}),
 			);
 
 		new Setting(containerEl)
-			.setName('Server Password')
+			.setName('Server password')
 			.setDesc('Password required by the host to connect to this server.')
 			.addText((text) => {
 				text.inputEl.type = 'password';
 				text
 					.setPlaceholder('Server password')
-					.setValue(this.plugin.settings.serverPassword ?? DEFAULT_SETTINGS.serverPassword ?? '')
-					.onChange(async (value) => {
-						this.plugin.settings.serverPassword = value.trim();
-						await this.plugin.saveSettings();
-						this.plugin.scheduleReconnect();
+					.setValue(draft.serverPassword ?? DEFAULT_SETTINGS.serverPassword ?? '')
+					.onChange((value) => {
+						draft.serverPassword = value.trim();
 					});
 			})
 			.addExtraButton((btn) => {
@@ -114,34 +149,41 @@ export class CollabSettingTab extends PluginSettingTab {
 					});
 			});
 
+		// Rooms Section: only active room and collapsed other rooms
+		this.roomsContainerEl = containerEl.createDiv({ cls: 'synqra-rooms-section' });
+		this.renderRoomsList();
+
 		new Setting(containerEl)
 			.setName('Display name')
 			.setDesc('The name shown to other collaborators.')
 			.addText((text) =>
 				text
 					.setPlaceholder(getRandomUsername())
-					.setValue(this.plugin.settings.displayName)
-					.onChange(async (value) => {
-						this.plugin.settings.displayName = value.trim() || getRandomUsername();
-						await this.plugin.saveSettings();
-						this.plugin.presenceManager.debouncedBroadcastPresence();
-						this.plugin.onActiveFileChange();
+					.setValue(draft.displayName)
+					.onChange((value) => {
+						draft.displayName = value.trim() || getRandomUsername();
+					}),
+			)
+			.addButton((button) =>
+				button
+					.setButtonText('Randomize')
+					.setTooltip('Pick a random user name')
+					.onClick(() => {
+						draft.displayName = getRandomUsername();
+						this.display();
 					}),
 			);
 
 		const colorSetting = new Setting(containerEl)
 			.setName('Cursor color')
-			.setDesc('Color of your cursor and selection as seen by other peers.');
+			.setDesc('Pick a color for selection highlights and collaborator markers.');
 
 		colorSetting.addText((text) =>
 			text
-				.setPlaceholder('#30bced')
-				.setValue(this.plugin.settings.cursorColor)
-				.onChange(async (value) => {
-					this.plugin.settings.cursorColor = value.trim();
-					await this.plugin.saveSettings();
-					this.plugin.presenceManager.debouncedBroadcastPresence();
-					this.plugin.onActiveFileChange();
+				.setPlaceholder('#30Bced')
+				.setValue(draft.cursorColor)
+				.onChange((value) => {
+					draft.cursorColor = value.trim();
 				}),
 		);
 
@@ -149,40 +191,21 @@ export class CollabSettingTab extends PluginSettingTab {
 			button
 				.setButtonText('Randomize')
 				.setTooltip('Pick a random preset color')
-				.onClick(async () => {
-					this.plugin.settings.cursorColor = getRandomPresetColor();
-					await this.plugin.saveSettings();
-					this.plugin.presenceManager.debouncedBroadcastPresence();
-					this.plugin.onActiveFileChange();
+				.onClick(() => {
+					draft.cursorColor = getRandomPresetColor();
 					this.display();
 				}),
 		);
 
 		new Setting(containerEl)
-			.setName('Room ID')
-			.setDesc('The collaboration room. Peers must use the same room ID to share a vault.')
-			.addText((text) =>
-				text
-					.setPlaceholder('vault-a')
-					.setValue(this.plugin.settings.roomId)
-					.onChange(async (value) => {
-						this.plugin.settings.roomId = value.trim() || DEFAULT_SETTINGS.roomId;
-						await this.plugin.saveSettings();
-						this.plugin.scheduleReconnect();
-					}),
-			);
-
-		new Setting(containerEl)
 			.setName('Shared folder')
-			.setDesc('Folder path to sync and collaborate on (e.g. "Collab"). Leave blank to sync the entire vault.')
+			.setDesc('Folder path to sync and collaborate on (e.g. "collab"). Leave blank to sync the entire vault.')
 			.addText((text) =>
 				text
 					.setPlaceholder('Entire vault')
-					.setValue(this.plugin.settings.sharedFolder ?? '')
-					.onChange(async (value) => {
-						this.plugin.settings.sharedFolder = value.trim();
-						await this.plugin.saveSettings();
-						this.plugin.scheduleReconnect();
+					.setValue(draft.sharedFolder ?? '')
+					.onChange((value) => {
+						draft.sharedFolder = value.trim();
 					}),
 			);
 
@@ -190,56 +213,49 @@ export class CollabSettingTab extends PluginSettingTab {
 			.setName('Auto-connect on startup')
 			.setDesc('Connect to the room automatically when Obsidian opens.')
 			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.autoConnect).onChange(async (value) => {
-					this.plugin.settings.autoConnect = value;
-					await this.plugin.saveSettings();
+				toggle.setValue(draft.autoConnect).onChange((value) => {
+					draft.autoConnect = value;
 				}),
 			);
 
+		// Single Confirm & Connect CTA at bottom of Connection section
 		new Setting(containerEl)
-			.setName('Reconnect now')
-			.setDesc('Close the current connection and reconnect with the latest settings.')
-			.addButton((button) =>
-				button.setButtonText('Reconnect').onClick(() => {
-					this.plugin.scheduleReconnect();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName('Sync vault manifest')
-			.setDesc('Force a full scan and publish of the vault manifest to peers.')
-			.addButton((button) =>
-				button.setButtonText('Publish manifest').onClick(() => {
-					void this.plugin.publishManifest();
-				}),
+			.setName('Confirm settings & connect')
+			.setDesc('Save settings and connect now with current configuration.')
+			.addButton((btn) =>
+				btn
+					.setButtonText('Confirm & connect')
+					.setCta()
+					.onClick(async () => {
+						await this.applyAndConnect();
+					}),
 			);
 
 		// --- Admin Panel Section ---
 		containerEl.createEl('hr', { cls: 'collab-divider' });
-		new Setting(containerEl).setName('Server Admin Controls').setHeading();
+		new Setting(containerEl).setName('Server admin controls').setHeading();
 		containerEl.createEl('p', {
-			text: 'Enter the server Admin Password to create, manage, and delete collaboration rooms on this server.',
+			text: 'Enter the server admin password to create, manage, and delete collaboration rooms on this server.',
 			cls: 'setting-item-description',
 		});
 
 		const adminSetting = new Setting(containerEl)
-			.setName('Admin Password')
+			.setName('Admin password')
 			.setDesc('Used exclusively for managing rooms on the host server.');
 
 		adminSetting.addText((text) => {
 			text.inputEl.type = 'password';
 			text
 				.setPlaceholder('Admin password')
-				.setValue(this.plugin.settings.adminPassword ?? '')
-				.onChange(async (value) => {
-					this.plugin.settings.adminPassword = value;
-					await this.plugin.saveSettings();
+				.setValue(draft.adminPassword ?? '')
+				.onChange((value) => {
+					draft.adminPassword = value;
 				});
 		});
 
 		adminSetting.addButton((btn) => {
 			btn
-				.setButtonText(this.isAdminUnlocked ? 'Refresh Rooms' : 'Unlock Admin Panel')
+				.setButtonText(this.isAdminUnlocked ? 'Refresh rooms' : 'Unlock admin panel')
 				.setCta()
 				.onClick(async () => {
 					await this.verifyAndLoadAdminRooms();
@@ -248,14 +264,14 @@ export class CollabSettingTab extends PluginSettingTab {
 
 		if (this.isAdminUnlocked) {
 			const adminBox = containerEl.createDiv({ cls: 'collab-admin-panel' });
-			new Setting(adminBox).setName('Create New Room').setHeading();
+			new Setting(adminBox).setName('Create new room').setHeading();
 
 			new Setting(adminBox)
-				.setName('New Room ID')
+				.setName('New room ID')
 				.setDesc('Unique room identifier (letters, numbers, dashes, underscores).')
 				.addText((text) =>
 					text
-						.setPlaceholder('e.g. team-vault')
+						.setPlaceholder('Example: team-vault')
 						.setValue(this.newRoomId)
 						.onChange((val) => {
 							this.newRoomId = val;
@@ -271,18 +287,18 @@ export class CollabSettingTab extends PluginSettingTab {
 				)
 				.addButton((btn) =>
 					btn
-						.setButtonText('Create Room')
+						.setButtonText('Create room')
 						.setCta()
 						.onClick(async () => {
 							if (!this.newRoomId.trim()) {
-								new Notice('Please enter a Room ID');
+								new Notice('Please enter a room ID');
 								return;
 							}
 							await this.createRoomOnServer(this.newRoomId.trim(), this.newRoomDesc.trim());
 						}),
 				);
 
-			new Setting(adminBox).setName('Registered Rooms on Server').setHeading();
+			new Setting(adminBox).setName('Registered rooms on server').setHeading();
 
 			if (this.isLoadingRooms) {
 				adminBox.createEl('p', { text: 'Loading rooms from server...', cls: 'setting-item-description' });
@@ -290,28 +306,30 @@ export class CollabSettingTab extends PluginSettingTab {
 				adminBox.createEl('p', { text: 'No rooms found on this server.', cls: 'setting-item-description' });
 			} else {
 				for (const room of this.adminRooms) {
-					const isCurrentRoom = this.plugin.settings.roomId === room.id;
-					const roomSetting = new Setting(adminBox)
-						.setName(`${room.id} ${isCurrentRoom ? '(Active Room)' : ''}`)
+					const isConnected = this.plugin.isConnected();
+					const isCurrentConnected = isConnected && this.plugin.settings.roomId === room.id;
+					const isDraftSelected = draft.roomId === room.id;
+					const roomTag = isCurrentConnected ? '(Connected)' : isDraftSelected ? '(Selected)' : '';
+					const itemSetting = new Setting(adminBox)
+						.setName(`${room.id} ${roomTag}`.trim())
 						.setDesc(
-							`Peers Online: ${room.activePeers} | Documents: ${room.docCount}${room.description ? ` | ${room.description}` : ''}`,
+							`Peers online: ${room.activePeers} | Documents: ${room.docCount}${room.description ? ` | ${room.description}` : ''}`,
 						);
 
-					if (!isCurrentRoom) {
-						roomSetting.addButton((btn) =>
-							btn.setButtonText('Join Room').onClick(async () => {
-								this.plugin.settings.roomId = room.id;
-								await this.plugin.saveSettings();
-								this.plugin.scheduleReconnect();
-								new Notice(`Switched active room to '${room.id}'`);
+					if (!isDraftSelected && !isCurrentConnected) {
+						itemSetting.addButton((btn) =>
+							btn.setButtonText('Select room').onClick(() => {
+								draft.roomId = room.id;
+								new Notice(`Selected room '${room.id}'. Click 'Confirm & connect' to apply.`);
+								this.renderRoomsList();
 								this.display();
 							}),
 						);
 					}
 
-					roomSetting.addButton((btn) =>
+					itemSetting.addButton((btn) =>
 						btn
-							.setButtonText('Delete Room')
+							.setButtonText('Delete room')
 							.setWarning()
 							.onClick(() => {
 								new ConfirmDeleteModal(this.app, room.id, async () => {
@@ -324,14 +342,160 @@ export class CollabSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private renderRoomsList(): void {
+		if (!this.roomsContainerEl) return;
+		this.roomsContainerEl.empty();
+		const draft = this.draftSettings || this.plugin.settings;
+		const isConnected = this.plugin.isConnected();
+		const connectedRoomId = this.plugin.settings.roomId;
+
+		// Only show active room field information if a room is actively connected to by the user
+		if (isConnected && connectedRoomId) {
+			const activeRoomInfo = this.serverRooms.find((r) => r.id === connectedRoomId);
+			const activeDesc = activeRoomInfo
+				? `Peers online: ${activeRoomInfo.activePeers} | Documents: ${activeRoomInfo.docCount}${activeRoomInfo.description ? ` | ${activeRoomInfo.description}` : ''}`
+				: 'Connected collaboration room';
+
+			const activeItem = new Setting(this.roomsContainerEl)
+				.setName(connectedRoomId)
+				.setDesc(activeDesc);
+
+			activeItem.addButton((btn) =>
+				btn
+					.setButtonText('Connected')
+					.setDisabled(true),
+			);
+		}
+
+		// Rooms list (either other rooms if connected, or all server rooms if not connected)
+		const candidateRooms = isConnected && connectedRoomId
+			? this.serverRooms.filter((r) => r.id !== connectedRoomId)
+			: this.serverRooms;
+
+		if (candidateRooms.length > 0) {
+			const detailsEl = this.roomsContainerEl.createEl('details', { cls: 'synqra-rooms-details' });
+			if (this.isRoomsExpanded) {
+				detailsEl.setAttribute('open', '');
+			}
+			detailsEl.addEventListener('toggle', () => {
+				this.isRoomsExpanded = detailsEl.open;
+			});
+
+			const summaryTitle = isConnected
+				? `Other rooms on server (${candidateRooms.length})`
+				: `Available rooms on server (${candidateRooms.length})`;
+
+			detailsEl.createEl('summary', {
+				text: summaryTitle,
+				cls: 'synqra-rooms-summary',
+			});
+
+			for (const room of candidateRooms) {
+				const isSelectedDraft = draft.roomId === room.id;
+				const item = new Setting(detailsEl)
+					.setName(room.id)
+					.setDesc(
+						`Peers online: ${room.activePeers} | Documents: ${room.docCount}${room.description ? ` | ${room.description}` : ''}`,
+					);
+
+				if (isSelectedDraft) {
+					item.addButton((btn) =>
+						btn
+							.setButtonText('Selected')
+							.setDisabled(true),
+					);
+				} else {
+					item.addButton((btn) =>
+						btn
+							.setButtonText('Select room')
+							.onClick(() => {
+								draft.roomId = room.id;
+								this.renderRoomsList();
+							}),
+					);
+				}
+			}
+		}
+	}
+
+	private async applyAndConnect(): Promise<void> {
+		if (!this.draftSettings) return;
+		if (!this.draftSettings.roomId.trim()) {
+			new Notice('Please select or create a room before connecting');
+			return;
+		}
+		if (!this.draftSettings.displayName.trim()) {
+			this.draftSettings.displayName = getRandomUsername();
+		}
+		this.plugin.settings = Object.assign({}, this.draftSettings);
+		await this.plugin.saveSettings();
+		this.plugin.presenceManager.debouncedBroadcastPresence();
+		this.plugin.onActiveFileChange();
+		this.plugin.scheduleReconnect();
+		new Notice(`Saved settings and connecting to '${this.plugin.settings.roomId}'...`);
+		this.renderRoomsList();
+	}
+
+	private async fetchServerRooms(silent = true): Promise<void> {
+		const serverUrl = this.draftSettings?.serverUrl?.trim() || this.plugin.settings.serverUrl?.trim();
+		if (!serverUrl) return;
+
+		const httpUrl = toHttpUrl(serverUrl);
+		const sep = httpUrl.endsWith('/') ? '' : '/';
+		const serverPass = this.draftSettings?.serverPassword?.trim() ?? this.plugin.settings.serverPassword?.trim() ?? '';
+
+		try {
+			this.isLoadingServerRooms = true;
+			const res = await requestUrl({
+				url: `${httpUrl}${sep}api/rooms`,
+				method: 'GET',
+				headers: {
+					Authorization: `Bearer ${serverPass}`,
+					'x-server-password': serverPass,
+				},
+				throw: false,
+			});
+
+			if (res.status === 200) {
+				const data = res.json as { rooms: RoomInfo[] };
+				this.serverRooms = data.rooms || [];
+				if (this.draftSettings) {
+					const hasDraftRoom = this.serverRooms.some((r) => r.id === this.draftSettings?.roomId);
+					if (!hasDraftRoom && !this.plugin.isConnected()) {
+						this.draftSettings.roomId = '';
+					}
+				}
+				if (!this.serverRooms.some((r) => r.id === this.plugin.settings.roomId) && !this.plugin.isConnected()) {
+					this.plugin.settings.roomId = '';
+				}
+				this.renderRoomsList();
+			} else if (res.status === 401) {
+				if (!silent) {
+					new Notice('Server authentication failed: check server password');
+				}
+			} else if (res.status === 404) {
+				if (!silent) {
+					new Notice('Server returned 404: /api/rooms not found. Please update and restart your synqra server container to enable room discovery.');
+				}
+			}
+		} catch (err) {
+			if (!silent) {
+				new Notice(`Failed to fetch rooms: ${err instanceof Error ? err.message : String(err)}`);
+			}
+		} finally {
+			this.isLoadingServerRooms = false;
+		}
+	}
+
 	private async verifyAndLoadAdminRooms(): Promise<void> {
-		const adminPass = this.plugin.settings.adminPassword?.trim();
+		const adminPass = this.draftSettings?.adminPassword?.trim() ?? this.plugin.settings.adminPassword?.trim() ?? '';
 		if (!adminPass) {
-			new Notice('Please enter the Admin Password first');
+			new Notice('Please enter the admin password first');
 			return;
 		}
 
-		const httpUrl = toHttpUrl(this.plugin.settings.serverUrl);
+		const serverUrl = this.draftSettings?.serverUrl?.trim() || this.plugin.settings.serverUrl?.trim();
+		const httpUrl = toHttpUrl(serverUrl);
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
 		try {
@@ -349,7 +513,7 @@ export class CollabSettingTab extends PluginSettingTab {
 
 			if (verifyRes.status !== 200) {
 				this.isAdminUnlocked = false;
-				new Notice('Admin verification failed: Invalid admin password');
+				new Notice('Admin verification failed: invalid admin password');
 				this.display();
 				return;
 			}
@@ -366,8 +530,9 @@ export class CollabSettingTab extends PluginSettingTab {
 	}
 
 	private async fetchRoomsList(): Promise<void> {
-		const adminPass = this.plugin.settings.adminPassword?.trim() ?? '';
-		const httpUrl = toHttpUrl(this.plugin.settings.serverUrl);
+		const adminPass = this.draftSettings?.adminPassword?.trim() ?? this.plugin.settings.adminPassword?.trim() ?? '';
+		const serverUrl = this.draftSettings?.serverUrl?.trim() || this.plugin.settings.serverUrl?.trim();
+		const httpUrl = toHttpUrl(serverUrl);
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
 		try {
@@ -392,8 +557,9 @@ export class CollabSettingTab extends PluginSettingTab {
 	}
 
 	private async createRoomOnServer(roomId: string, description: string): Promise<void> {
-		const adminPass = this.plugin.settings.adminPassword?.trim() ?? '';
-		const httpUrl = toHttpUrl(this.plugin.settings.serverUrl);
+		const adminPass = this.draftSettings?.adminPassword?.trim() ?? this.plugin.settings.adminPassword?.trim() ?? '';
+		const serverUrl = this.draftSettings?.serverUrl?.trim() || this.plugin.settings.serverUrl?.trim();
+		const httpUrl = toHttpUrl(serverUrl);
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
 		try {
@@ -413,6 +579,7 @@ export class CollabSettingTab extends PluginSettingTab {
 				this.newRoomId = '';
 				this.newRoomDesc = '';
 				await this.fetchRoomsList();
+				await this.fetchServerRooms(true);
 				this.display();
 			} else {
 				const json = res.json as { error?: string };
@@ -424,8 +591,9 @@ export class CollabSettingTab extends PluginSettingTab {
 	}
 
 	private async deleteRoomOnServer(roomId: string): Promise<void> {
-		const adminPass = this.plugin.settings.adminPassword?.trim() ?? '';
-		const httpUrl = toHttpUrl(this.plugin.settings.serverUrl);
+		const adminPass = this.draftSettings?.adminPassword?.trim() ?? this.plugin.settings.adminPassword?.trim() ?? '';
+		const serverUrl = this.draftSettings?.serverUrl?.trim() || this.plugin.settings.serverUrl?.trim();
+		const httpUrl = toHttpUrl(serverUrl);
 		const sep = httpUrl.endsWith('/') ? '' : '/';
 
 		try {
@@ -439,13 +607,17 @@ export class CollabSettingTab extends PluginSettingTab {
 			});
 
 			if (res.status === 200) {
-				new Notice(`Room '${roomId}' deleted from server.`);
+				new Notice(`Room '${roomId}' deleted from server`);
+				if (this.draftSettings && this.draftSettings.roomId === roomId) {
+					this.draftSettings.roomId = '';
+				}
 				if (this.plugin.settings.roomId === roomId) {
-					this.plugin.settings.roomId = 'vault-a';
+					this.plugin.settings.roomId = '';
 					await this.plugin.saveSettings();
-					this.plugin.scheduleReconnect();
+					this.plugin.disconnect();
 				}
 				await this.fetchRoomsList();
+				await this.fetchServerRooms(true);
 				this.display();
 			} else {
 				const json = res.json as { error?: string };
